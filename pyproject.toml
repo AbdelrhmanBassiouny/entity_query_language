@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "entity_query_language"
 dynamic = ["version", "dependencies", "optional-dependencies"]
-description = "Creates a relational query language that is easy to use and serves as a front end to other query languages like sql or prolog"
+description = "Provides a relational query language that is pythonic and intuitive. Entity Query Language serves as a front end to other query languages like sql or prolog"
 readme = "README.md"
 authors = [{ name = "Abdelrhman Bassiouny", email = "abassiou@uni-bremen.de" }]
 license = { file = "LICENSE" }
