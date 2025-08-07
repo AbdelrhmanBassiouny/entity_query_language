@@ -1,0 +1,6 @@
+-r requirements.txt
+graphviz
+pygraphviz>=1.7
+pydot
+pdbpp
+pytest

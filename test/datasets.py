@@ -1,243 +1,22 @@
 from __future__ import annotations
 
-import os
-import pickle
 from dataclasses import dataclass, field
 
-import sqlalchemy
-from sqlalchemy import ForeignKey
-from sqlalchemy.orm import MappedAsDataclass, Mapped, mapped_column, relationship, MappedColumn
-from typing_extensions import Tuple, List, Set, Optional, Self
-from ucimlrepo import fetch_ucirepo
+from typing_extensions import List, Optional
 
-from ripple_down_rules.datastructures.case import Case, create_cases_from_dataframe
-from ripple_down_rules.datastructures.enums import Category
-from ripple_down_rules import TrackedObjectMixin
-from ripple_down_rules.rdr_decorators import RDRDecorator
-from ripple_down_rules.symbolic import symbolic
-
-
-def load_cached_dataset(cache_file):
-    """Loads the dataset from cache if it exists."""
-    dataset = {}
-    if '.pkl' not in cache_file:
-        cache_file += ".pkl"
-    for key in ["features", "targets", "ids"]:
-        part_file = cache_file.replace(".pkl", f"_{key}.pkl")
-        if not os.path.exists(part_file):
-            return None
-        with open(part_file, "rb") as f:
-            dataset[key] = pickle.load(f)
-    return dataset
-
-
-def save_dataset_to_cache(dataset, cache_file):
-    """Saves only essential parts of the dataset to cache."""
-    dataset_to_cache = {
-        "features": dataset.data.features,
-        "targets": dataset.data.targets,
-        "ids": dataset.data.ids,
-    }
-
-    for key, value in dataset_to_cache.items():
-        with open(cache_file.replace(".pkl", f"_{key}.pkl"), "wb") as f:
-            pickle.dump(dataset_to_cache[key], f)
-    print("Dataset cached successfully.")
-
-
-def get_dataset(dataset_id, cache_file: Optional[str] = None):
-    """Fetches dataset from cache or downloads it if not available."""
-    if cache_file is not None:
-        if not cache_file.endswith(".pkl"):
-            cache_file += ".pkl"
-    dataset = load_cached_dataset(cache_file) if cache_file else None
-    if dataset is None:
-        print("Downloading dataset...")
-        dataset = fetch_ucirepo(id=dataset_id)
-
-        # Check if dataset is valid before caching
-        if dataset is None or not hasattr(dataset, "data"):
-            print("Error: Failed to fetch dataset.")
-            return None
-
-        if cache_file:
-            save_dataset_to_cache(dataset, cache_file)
-
-        dataset = {
-            "features": dataset.data.features,
-            "targets": dataset.data.targets,
-            "ids": dataset.data.ids,
-        }
-
-    return dataset
-
-
-def load_zoo_dataset(cache_file: Optional[str] = None) -> Tuple[List[Case], List[Species]]:
-    """
-    Load the zoo dataset.
-
-    :param cache_file: the cache file to store the dataset or load it from.
-    :return: all cases and targets.
-    """
-    # fetch dataset
-    zoo = get_dataset(111, cache_file)
-
-    # data (as pandas dataframes)
-    X = zoo['features']
-    y = zoo['targets']
-    # get ids as list of strings
-    ids = zoo['ids'].values.flatten()
-    all_cases = create_cases_from_dataframe(X, name="Animal")
-
-    category_names = ["mammal", "bird", "reptile", "fish", "amphibian", "insect", "molusc"]
-    category_id_to_name = {i + 1: name for i, name in enumerate(category_names)}
-    # targets = [getattr(SpeciesCol, category_id_to_name[i]) for i in y.values.flatten()]
-    targets = [Species.from_str(category_id_to_name[i]) for i in y.values.flatten()]
-    return all_cases, targets
-
-
-def load_zoo_cases(cache_file: Optional[str] = None) -> List[Case]:
-    """
-    Load the zoo dataset cases.
-
-    :param cache_file: the cache file to store the dataset or load it from.
-    :return: all cases.
-    """
-    all_cases, _ = load_zoo_dataset(cache_file)
-    return all_cases
-
-
-class Species(Category):
-    mammal = "mammal"
-    bird = "bird"
-    reptile = "reptile"
-    fish = "fish"
-    amphibian = "amphibian"
-    insect = "insect"
-    molusc = "molusc"
-
-
-class Habitat(Category):
-    """
-    A habitat category is a category that represents the habitat of an animal.
-    """
-    land = "land"
-    water = "water"
-    air = "air"
-
-
-class PhysicalObject:
-    """
-    A physical object is an object that can be contained in a container.
-    """
-    _rdr_json_dir: str = os.path.join(os.path.dirname(__file__), "test_results")
-    """
-    The directory where the RDR serialized JSON files are stored.
-    """
-    _is_a_robot_rdr: RDRDecorator = RDRDecorator(_rdr_json_dir, (bool,), True,
-                                                 package_name="test")
-    """
-    The RDR decorator that is used to determine if the object is a robot or not.
-    """
-    _select_parts_rdr: RDRDecorator = RDRDecorator(_rdr_json_dir, (Self,), False,
-                                                   package_name="test")
-    """
-    The RDR decorator that is used to determine if the object is a robot or not.
-    """
-
-    def __init__(self, name: str, contained_objects: Optional[List[PhysicalObject]] = None):
-        self.name: str = name
-        self._contained_objects: List[PhysicalObject] = contained_objects or []
-
-    @property
-    def contained_objects(self) -> List[PhysicalObject]:
-        return self._contained_objects
-
-    @contained_objects.setter
-    def contained_objects(self, value: List[PhysicalObject]):
-        self._contained_objects = value
-
-    @_is_a_robot_rdr.decorator
-    def is_a_robot(self) -> bool:
-        pass
-
-    @_select_parts_rdr.decorator
-    def select_objects_that_are_parts_of_robot(self, objects: List[PhysicalObject], robot: Robot) -> List[PhysicalObject]:
-        pass
-
-    def __str__(self):
-        return self.name
-
-    def __repr__(self):
-        return self.name
-
-
-class Part(PhysicalObject):
-    ...
-
-
-class Robot(PhysicalObject):
-
-    def __init__(self, name: str, parts: Optional[List[Part]] = None):
-        super().__init__(name)
-        self.parts: List[Part] = parts if parts else []
-
-
-class Base(sqlalchemy.orm.DeclarativeBase):
-    pass
-
-
-class HabitatTable(MappedAsDataclass, Base):
-    __tablename__ = "Habitat"
-
-    id: Mapped[int] = mapped_column(init=False, primary_key=True, autoincrement=True)
-    habitat: Mapped[Habitat]
-    animal_id: MappedColumn = mapped_column(ForeignKey("Animal.id"), init=False)
-
-    def __hash__(self):
-        return hash(self.habitat)
-
-    def __str__(self):
-        return f"{HabitatTable.__name__}({Habitat.__name__}.{self.habitat.name})"
-
-    def __repr__(self):
-        return self.__str__()
-
-
-class MappedAnimal(MappedAsDataclass, Base):
-    __tablename__ = "Animal"
-
-    id: Mapped[int] = mapped_column(init=False, primary_key=True, autoincrement=True)
-    name: Mapped[str]
-    hair: Mapped[bool]
-    feathers: Mapped[bool]
-    eggs: Mapped[bool]
-    milk: Mapped[bool]
-    airborne: Mapped[bool]
-    aquatic: Mapped[bool]
-    predator: Mapped[bool]
-    toothed: Mapped[bool]
-    backbone: Mapped[bool]
-    breathes: Mapped[bool]
-    venomous: Mapped[bool]
-    fins: Mapped[bool]
-    legs: Mapped[int]
-    tail: Mapped[bool]
-    domestic: Mapped[bool]
-    catsize: Mapped[bool]
-    species: Mapped[Species] = mapped_column(nullable=True)
-
-    habitats: Mapped[Set[HabitatTable]] = relationship(default_factory=set)
+from entity_query_language.symbolic import symbolic
 
 
 @dataclass(unsafe_hash=True)
-class WorldEntity(TrackedObjectMixin):
+class WorldEntity:
     world: Optional[World] = field(default=None, kw_only=True, repr=False, hash=False)
+
 
 @symbolic
 @dataclass(unsafe_hash=True)
 class Body(WorldEntity):
     name: str
+
 
 @symbolic
 @dataclass(unsafe_hash=True)
@@ -290,6 +69,7 @@ class World:
 class View(WorldEntity):
     ...
 
+
 @symbolic
 @dataclass
 class Drawer(View):
@@ -318,5 +98,3 @@ class Cabinet(View):
         if not isinstance(other, Cabinet):
             return False
         return self.container == other.container and self.drawers == other.drawers and self.world == other.world
-
-

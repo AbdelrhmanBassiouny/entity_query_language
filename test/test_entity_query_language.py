@@ -1,6 +1,6 @@
-from ripple_down_rules import symbolic
-from ripple_down_rules.entity import an, entity, entities
-from ripple_down_rules.symbolic import contains, in_
+from entity_query_language import symbolic
+from entity_query_language.entity import an, entity, entities
+from entity_query_language.symbolic import contains, in_
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer
 
 

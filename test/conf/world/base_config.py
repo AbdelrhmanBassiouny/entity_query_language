@@ -3,12 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from omegaconf import MISSING
-from typing_extensions import List, TYPE_CHECKING
-
-from ripple_down_rules.datastructures.dataclasses import CaseConf
-
-if TYPE_CHECKING:
-    pass
+from typing_extensions import List, TYPE_CHECKING, Callable, Any
 
 
 @dataclass
@@ -40,6 +35,14 @@ class FixedConnectionConf(Connection):
 @dataclass
 class PrismaticConnectionConf(Connection):
     pass
+
+
+@dataclass
+class CaseConf:
+    factory_method: Callable[[Any], Any] = MISSING
+
+    def create(self) -> Any:
+        return self.factory_method()
 
 
 @dataclass
