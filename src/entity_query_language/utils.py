@@ -7,7 +7,11 @@ import re
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
-import six
+try:
+    import six
+except ImportError:
+    six = None
+
 from anytree import Node, RenderTree, PreOrderIter
 from graphviz import Source
 from typing_extensions import Callable, Set, Any, Optional, List
