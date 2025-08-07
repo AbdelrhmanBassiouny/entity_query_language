@@ -284,7 +284,6 @@ class FilteredDotExporter(object):
         self.include_nodes = include_nodes
         node_name_func = get_unique_node_names_func(node)
         self.include_node_names = [node_name_func(n) for n in self.include_nodes] if include_nodes else None
-        self.use_legend: bool = use_legend
 
     def __iter__(self):
         # prepare

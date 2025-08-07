@@ -40,13 +40,15 @@ class HashedValue:
     value: Any
     id_: Optional[int] = field(default=None)
 
+    def __post_init__(self):
+        if self.id_ is None:
+            if hasattr(self.value, "id_"):
+                self.id_ = self.value.id_
+            else:
+                self.id_ = id(self.value)
+
     def __hash__(self):
-        if self.id_ is None and hasattr(self.value, "id_"):
-            return hash(self.value.id_)
-        elif self.id_ is not None:
-            return hash(self.id_)
-        else:
-            return hash(id(self.value))
+        return hash(self.id_)
 
 
 @dataclass
@@ -534,12 +536,40 @@ class LogicalOperator(BinaryOperator, ABC):
         else:
             return value
 
+    def separate_or_entangle(self, separate: bool = True):
+        all_leaves = [operand.all_leaf_instances_ for operand in [self.left_, self.right_]]
+        unique_leaves = [operand.leaves_ for operand in [self.left_, self.right_]]
+        shared_leaves = set.intersection(*unique_leaves)
+        for leaf_hashed_value in shared_leaves:
+            leaf = leaf_hashed_value.value
+            first_occurrence = True
+            for operand_leaves in all_leaves:
+                if leaf.id_ not in {l.id_ for l in operand_leaves}:
+                    continue
+                if separate:
+                    if first_occurrence:
+                        first_occurrence = False
+                        continue
+                    leaf_instances = [l for l in operand_leaves if l.id_ == leaf.id_]
+                    leaf_instances[0].domain_ = copy(leaf.domain_)
+                else:
+                    leaf_instances = [l for l in operand_leaves if l.id_ == leaf.id_]
+                    leaf_instances[0].domain_ = leaf.domain_
+                for leaf_instance in leaf_instances[1:]:
+                    leaf_instance.domain_ = leaf_instances[0].domain_
+
 
 @dataclass(eq=False)
 class AND(LogicalOperator):
     """
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
+    invert_: bool = field(default=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.invert_:
+            self.separate_or_entangle(separate=False)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
 
@@ -587,22 +617,7 @@ class OR(LogicalOperator):
         # make the evaluation of each operand affect the others. Instead, we want each operand to have a copy of the
         # leaves, so that they can be evaluated independently. The leaves here are the symbolic variables that will be
         # constrained by the OR operator.
-        all_leaves = [operand.all_leaf_instances_ for operand in [self.left_, self.right_]]
-        unique_leaves = [operand.leaves_ for operand in [self.left_, self.right_]]
-        shared_leaves = set.intersection(*unique_leaves)
-        for leaf_hashed_value in shared_leaves:
-            leaf = leaf_hashed_value.value
-            first_occurrence = True
-            for operand_leaves in all_leaves:
-                if leaf.id_ not in {l.id_ for l in operand_leaves}:
-                    continue
-                if first_occurrence:
-                    first_occurrence = False
-                    continue
-                leaf_instances = [l for l in operand_leaves if l.id_ == leaf.id_]
-                leaf_instances[0].domain_ = copy(leaf.domain_)
-                for leaf_instance in leaf_instances[1:]:
-                    leaf_instance.domain_ = leaf_instances[0].domain_
+        self.separate_or_entangle(separate=True)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None):
         """
@@ -611,6 +626,7 @@ class OR(LogicalOperator):
         """
         # init an empty source if none is provided
         original_sources = sources or {}
+        seen_values = defaultdict(set)
 
         # constrain left values by available sources
         for operand in [self.left_, self.right_]:
@@ -622,8 +638,14 @@ class OR(LogicalOperator):
                 operand_value = self.check(operand, operand_value)
                 if not operand_value:
                     continue
-                operand_sources.update(operand_value)
-                yield operand_sources
+                filtered_operand_value = {}
+                for k, v in operand_value.items():
+                    if v not in seen_values[k]:
+                        seen_values[k].add(v)
+                        filtered_operand_value[k] = v
+                if len(filtered_operand_value) > 0:
+                    operand_sources.update(filtered_operand_value)
+                    yield operand_sources
                 operand_sources = copy(original_sources)
 
 
@@ -664,11 +686,11 @@ def Not(operand: Any) -> SymbolicExpression:
     if isinstance(operand, AND):
         operand.node_.parent = None
         operand = OR(Not(operand.left_), Not(operand.right_))
-        operand.node_.parent = parent.node_
+        operand.node_.parent = parent.node_ if parent is not None else None
     elif isinstance(operand, OR):
         operand.node_.parent = None
-        operand = AND(Not(operand.left_), Not(operand.right_))
-        operand.node_.parent = parent.node_
+        operand = AND(Not(operand.left_), Not(operand.right_), invert_=True)
+        operand.node_.parent = parent.node_ if parent is not None else None
     else:
         operand.invert_ = True
     return operand
