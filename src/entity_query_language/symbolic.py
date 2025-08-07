@@ -9,10 +9,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from anytree import Node
-from typing_extensions import Iterable, Any, Optional, Type, Dict, Set, ClassVar, Callable, Union
+from typing_extensions import Iterable, Any, Optional, Type, Dict, Set, ClassVar, Union
 from typing_extensions import dataclass_transform, List, Tuple
 
-from .utils import is_iterable, filter_data
+from .utils import is_iterable
 from .utils import make_list, IDGenerator
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
@@ -62,94 +62,6 @@ class HashedIterable:
         if self.iterable and not isinstance(self.iterable, HashedIterable):
             self.iterable = (HashedValue(id_=k, value=v) if not isinstance(v, HashedValue) else v
                              for k, v in enumerate(self.iterable))
-
-    @property
-    def ids(self) -> Set[int]:
-        """
-        Get the ids of the hashed values.
-
-        :return: A set of ids of the hashed values.
-        """
-        return set(self.values.keys())
-
-    def map(self, func: Callable[[Any], Any]):
-        """
-        Apply a function to each value in the HashedIterable and return a new HashedIterable.
-
-        :param func: The function to apply to each value.
-        :return: A new HashedIterable with the transformed values.
-        """
-        return HashedIterable(map(lambda v: HashedValue(id_=v.id_, value=func(v.value)), self.iterable))
-
-    def filter(self, selected_ids: Iterable[int], ids_are_indices: bool = False):
-        """
-        Filter the HashedIterable based on a set of selected ids.
-
-        :param selected_ids: An iterable of ids to keep in the HashedIterable.
-        :param ids_are_indices: Whether the ids are indices into the iterable. If True, the ids are used as
-         indices into the iterable. If False, the ids are used as the hash ids of the HashedValues.
-        :return: A new HashedIterable containing only the items with the specified ids.
-        """
-        if ids_are_indices:
-            to_filter, self.iterable = itertools.tee(self, 2)
-            self.iterable = filter_data(to_filter, selected_ids)
-        else:
-            it1, it2 = itertools.tee(self.iterable)
-            self.iterable = (v for v in it1 if v.id_ in selected_ids)
-        self.values = {}
-        return HashedIterable(self.iterable)
-
-    def update(self, values: HashedIterable):
-        """
-        Update the hashed values with another HashedIterable.
-
-        :param values: The HashedIterable to update with.
-        """
-        for id_, v in values.values.items():
-            self.add(v)
-
-    def add(self, value: HashedValue):
-        """
-        Add a HashedValue to the hashed values.
-
-        :param value: The HashedValue to add.
-        """
-        # if value.id_ not in self.values:
-        self.values[value.id_] = value
-        # else:
-        #     raise ValueError(f"Value with id {value.id_} already exists in the hashed values.")
-
-    def get_unique_values(self) -> Iterable[HashedValue]:
-        seen_values = set()
-        for v in self.iterable:
-            if v not in seen_values:
-                seen_values.add(v)
-                yield v
-
-    def union(self, other: HashedIterable) -> HashedIterable:
-        """
-        Create a union of two HashedIterables.
-
-        :param other: The other HashedIterable to union with.
-        :return: A new HashedIterable containing the union of both.
-        """
-
-        def union():
-            seen_values = set()
-            for v in self.iterable:
-                if v not in seen_values:
-                    seen_values.add(v)
-                    yield v
-            for v in other.iterable:
-                if v not in seen_values:
-                    seen_values.add(v)
-                    yield v
-
-        return HashedIterable(union())
-
-    def intersection(self, other: HashedIterable) -> HashedIterable:
-        common_keys = self.values.keys() & other.values.keys()
-        return HashedIterable({k: self.values[k] for k in common_keys})
 
     def __iter__(self):
         """
@@ -225,6 +137,12 @@ class SymbolicExpression(ABC):
         pass
 
     @property
+    def parent_(self) -> Optional[SymbolicExpression]:
+        if self.node_.parent is not None:
+            return self.node_.parent._expression
+        return None
+
+    @property
     def root_(self) -> SymbolicExpression:
         """
         Get the root of the symbolic expression tree.
@@ -279,10 +197,10 @@ class SymbolicExpression(ABC):
         return Comparator(item, 'in', self)
 
     def __and__(self, other):
-        return And(self, other)
+        return AND(self, other)
 
     def __or__(self, other):
-        return Or(self, other)
+        return OR(self, other)
 
     def __invert__(self):
         return Not(self)
@@ -412,11 +330,15 @@ class DomainMapping(HasDomain, ABC):
     A symbolic expression the maps the domain of symbolic variables.
     """
     child_: HasDomain
+    invert_: bool = field(init=False, default=False)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[HashedValue]:
         child_val = self.child_.evaluate_(sources)
         if self.root_ is self:
-            indices = [v.id_ for v in self if v.value]
+            if not self.invert_:
+                indices = [v.id_ for v in self if v.value]
+            else:
+                indices = [v.id_ for v in self if not v.value]
             condition = lambda v: v.id_ in indices
             yield from ({self.leaf_id_: self.leaf_.domain_[v.id_]} for v in child_val if condition(v))
         else:
@@ -474,32 +396,7 @@ class ConstrainingOperator(SymbolicExpression, ABC):
     This is used to ensure that the operator can be applied to symbolic expressions
     and that it can constrain the results based on indices.
     """
-    operands_values_: Dict[int, HashedValue] = field(default_factory=lambda: defaultdict(HashedIterable), init=False)
-
-    def constrain_(self):
-        """
-        Constrain the symbolic expression based on the indices.
-        This method should be implemented by subclasses.
-        """
-        for operand_id, value in self.operands_values_.items():
-            self.id_expression_map_[operand_id].constrain_([value.id_])
-
-    @property
-    @abstractmethod
-    def leaves_(self) -> Set[HashedValue]:
-        """
-        :return: Set of leaves of symbolic expressions, these are the variables that will have their domains constrained.
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def all_leaf_instances_(self) -> List[HasDomain]:
-        """
-        :return: List of all leaf instances of the symbolic expression.
-        This is useful for accessing the leaves of the symbolic expression tree.
-        """
-        ...
+    ...
 
 
 @dataclass(eq=False)
@@ -527,20 +424,6 @@ class UnaryOperator(ConstrainingOperator, ABC):
     @lru_cache(maxsize=None)
     def all_leaf_instances_(self) -> List[HasDomain]:
         return self.operand_.all_leaf_instances_
-
-
-@dataclass(eq=False)
-class Not(UnaryOperator):
-    """
-    A symbolic NOT operation that can be used to negate symbolic expressions.
-    """
-
-    def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None):
-        def operator_yield():
-            yield from (id_ for id_, value in self.operand_ if not value)
-
-        operand_leaf = self.operand_.leaves_.pop().value
-        operand_leaf.domain_.filter(operator_yield())
 
 
 @dataclass(eq=False)
@@ -586,6 +469,7 @@ class Comparator(BinaryOperator):
     """
     A symbolic equality check that can be used to compare symbolic variables.
     """
+    invert_: bool = field(init=False, default=False)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
@@ -620,6 +504,7 @@ class Comparator(BinaryOperator):
 
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[Dict[int, HashedValue]]:
         satisfied = eval(f"left_value.value {self.operation_} right_value.value")
+        satisfied = not satisfied if self.invert_ else satisfied
         if satisfied:
             left_leaf_value = self.left_.leaf_.domain_[left_value.id_]
             right_leaf_value = self.right_.leaf_.domain_[right_value.id_]
@@ -651,7 +536,7 @@ class LogicalOperator(BinaryOperator, ABC):
 
 
 @dataclass(eq=False)
-class And(LogicalOperator):
+class AND(LogicalOperator):
     """
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
@@ -690,7 +575,7 @@ class And(LogicalOperator):
 
 
 @dataclass(eq=False)
-class Or(LogicalOperator):
+class OR(LogicalOperator):
     """
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
@@ -755,18 +640,54 @@ def symbol(cls):
     return cls
 
 
-def and_(*conditions):
+def And(*conditions):
     """
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
-    return And(list(conditions))
+    return chained_logic(AND, *conditions)
 
 
-def or_(*conditions):
+def Or(*conditions):
     """
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
-    return Or(list(conditions))
+    return chained_logic(OR, *conditions)
+
+
+def Not(operand: Any) -> SymbolicExpression:
+    """
+    A symbolic NOT operation that can be used to negate symbolic expressions.
+    """
+    if not isinstance(operand, SymbolicExpression):
+        operand = Variable.from_domain_(operand)
+    parent = operand.parent_
+    if isinstance(operand, AND):
+        operand.node_.parent = None
+        operand = OR(Not(operand.left_), Not(operand.right_))
+        operand.node_.parent = parent.node_
+    elif isinstance(operand, OR):
+        operand.node_.parent = None
+        operand = AND(Not(operand.left_), Not(operand.right_))
+        operand.node_.parent = parent.node_
+    else:
+        operand.invert_ = True
+    return operand
+
+
+def chained_logic(operator: Type[LogicalOperator], *conditions):
+    """
+    A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
+
+    :param operator: The symbolic operator to apply between the conditions.
+    :param conditions: The conditions to be chained.
+    """
+    prev_operation = None
+    for condition in conditions:
+        if prev_operation is None:
+            prev_operation = condition
+            continue
+        prev_operation = operator(prev_operation, condition)
+    return prev_operation
 
 
 def in_(item, container):
