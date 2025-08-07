@@ -95,7 +95,7 @@ def test_generate_with_using_multi_or(handles_and_containers_world):
     # assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
 
 
-def test_generate_with_and_or(handles_and_containers_world):
+def test_generate_with_or_and(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles_and_container1():
@@ -103,6 +103,23 @@ def test_generate_with_and_or(handles_and_containers_world):
                              Or(And(contains(body.name, "Handle"),
                                     contains(body.name, '1'))
                                 , And(contains(body.name, 'Container'),
+                                      contains(body.name, '1'))
+                                )
+                             )
+                      )
+
+    handles_and_container1 = list(generate_handles_and_container1())
+    assert len(handles_and_container1) == 2, "Should generate at least one handle."
+
+
+def test_generate_with_and_or(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    def generate_handles_and_container1():
+        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+                             And(Or(contains(body.name, "Handle"),
+                                    contains(body.name, '1'))
+                                , Or(contains(body.name, 'Container'),
                                       contains(body.name, '1'))
                                 )
                              )
@@ -196,6 +213,24 @@ def test_not_or(handles_and_containers_world):
                          )
 
     all_not_handle1_or2 = list(not_handle1_or2)
-    assert len(all_not_handle1_or2) == 4, "Should generate 5 bodies"
+    assert len(all_not_handle1_or2) == 4, "Should generate 4 bodies"
     assert all(
         h.name not in ["Handle1", "Handle2"] for h in all_not_handle1_or2), "All generated items should satisfy query"
+
+
+def test_not_and_or(handles_and_containers_world):
+    world = handles_and_containers_world
+    not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
+                                               Not(Or(And(contains(body.name, "Handle"),
+                                                          contains(body.name, '1'))
+                                                      , And(contains(body.name, 'Container'),
+                                                            contains(body.name, '1'))
+                                                      ))
+                                               )
+                                        )
+
+    all_not_handle1_and_not_container1 = list(not_handle1_and_not_container1)
+    assert len(all_not_handle1_and_not_container1) == 4, "Should generate 4 bodies"
+    assert all(
+        h.name not in ["Handle1", "Container1"] for h in
+        all_not_handle1_and_not_container1), "All generated items should satisfy query"
