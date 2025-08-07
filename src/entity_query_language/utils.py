@@ -12,8 +12,12 @@ try:
 except ImportError:
     six = None
 
+try:
+    from graphviz import Source
+except ImportError:
+    Source = None
+
 from anytree import Node, RenderTree, PreOrderIter
-from graphviz import Source
 from typing_extensions import Callable, Set, Any, Optional, List
 
 from . import logger
