@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from typing_extensions import List, Optional
 
-from entity_query_language.symbolic import symbolic
+from entity_query_language.symbolic import symbol
 
 
 @dataclass(unsafe_hash=True)
@@ -12,38 +12,38 @@ class WorldEntity:
     world: Optional[World] = field(default=None, kw_only=True, repr=False, hash=False)
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class Body(WorldEntity):
     name: str
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class Handle(Body):
     ...
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class Container(Body):
     ...
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class Connection(WorldEntity):
     parent: Body
     child: Body
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class FixedConnection(Connection):
     ...
 
 
-@symbolic
+@symbol
 @dataclass(unsafe_hash=True)
 class PrismaticConnection(Connection):
     ...
@@ -70,7 +70,7 @@ class View(WorldEntity):
     ...
 
 
-@symbolic
+@symbol
 @dataclass
 class Drawer(View):
     handle: Handle

@@ -21,7 +21,7 @@ EQL tries to mirror your intent in a query statement with as less boiler plate c
 For example an attribute access with and equal check to another value is just how you expect:
 
 ```python
-from entity_query_language import entity, an, let
+from entity_query_language import entity, an
 from dataclasses import dataclass
 from typing_extensions import List
 

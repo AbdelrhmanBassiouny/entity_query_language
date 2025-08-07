@@ -369,8 +369,10 @@ class Variable(HasDomain):
                 cls_kwarg_gen = {k: iter(v) if is_iterable(v) else v for k, v in self.cls_kwargs_.items()}
                 while True:
                     try:
-                        yield self.cls_(**{k: next(kwarg_gen) if is_iterable(kwarg_gen) else kwarg_gen
-                                           for k, kwarg_gen in cls_kwarg_gen.items()})
+                        instance = self.cls_.__new__(self.cls_)
+                        for k, kwarg_gen in cls_kwarg_gen.items():
+                            setattr(instance, k, next(kwarg_gen) if is_iterable(kwarg_gen) else kwarg_gen)
+                        yield instance
                     except StopIteration:
                         break
 
@@ -741,7 +743,7 @@ class Or(LogicalOperator):
 
 
 @dataclass_transform()
-def symbolic(cls):
+def symbol(cls):
     orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
