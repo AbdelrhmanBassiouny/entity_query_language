@@ -21,7 +21,7 @@ EQL tries to mirror your intent in a query statement with as less boiler plate c
 For example an attribute access with and equal check to another value is just how you expect:
 
 ```python
-from entity_query_language import entity, an
+from entity_query_language import entity, an, let
 from dataclasses import dataclass
 from typing_extensions import List
 
@@ -30,16 +30,18 @@ from typing_extensions import List
 class Body:
     name: str
 
+
 @dataclass(eq=False)
 class World:
     id_: int
     bodies: List[Body]
-    
+
 
 world = World(1, [Body("Body1"), Body("Body2")])
 
-results = an(entity(body:=Body, domain=world.bodies), body.name == "Body2")
-assert results[0][body].name == "Body2"
+results_generator = an(entity(body := let(type_=Body, domain=world.bodies), body.name == "Body2"))
+results = list(results_generator)
+assert results[0].name == "Body2"
 ```
 
 where this creates a body variable that gets its values from world.bodies, and filters them to have their att "name"

@@ -3,6 +3,7 @@ from typing import TypeVar, Type
 from typing_extensions import Any, Optional, Union, Iterable, Dict
 
 from . import symbolic
+from .failures import MultipleSolutionFound
 from .symbolic import Variable, and_, SymbolicExpression, LogicalOperator, Comparator, ConstrainingOperator, Or
 from .utils import render_tree, make_tuple, make_list
 
@@ -11,6 +12,16 @@ T = TypeVar('T')  # Define type variable "T"
 
 def an(entity_var: T) -> T:
     return entity_var
+
+
+def the(entity_var: T) -> T:
+    first_val = next(entity_var)
+    try:
+        second_val = next(entity_var)
+    except StopIteration:
+        return first_val
+    else:
+        raise MultipleSolutionFound(first_val, second_val)
 
 
 def entity(entity_var: T, properties: Union[SymbolicExpression, bool], show_tree: bool = False) -> Iterable[T]:
