@@ -564,12 +564,6 @@ class AND(LogicalOperator):
     """
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
-    invert_: bool = field(default=False)
-
-    def __post_init__(self):
-        super().__post_init__()
-        if self.invert_:
-            self.separate_or_entangle(separate=False)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
 
@@ -609,15 +603,6 @@ class OR(LogicalOperator):
     """
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
-
-    def __post_init__(self):
-        super().__post_init__()
-        # Find common leaves between operands and split them into separate leaves, each connected to a separate operand.
-        # This is necessary to ensure that the leaves of the OR operator are not shared between operands, which would
-        # make the evaluation of each operand affect the others. Instead, we want each operand to have a copy of the
-        # leaves, so that they can be evaluated independently. The leaves here are the symbolic variables that will be
-        # constrained by the OR operator.
-        self.separate_or_entangle(separate=True)
 
     def evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None):
         """
@@ -689,7 +674,7 @@ def Not(operand: Any) -> SymbolicExpression:
         operand.node_.parent = parent.node_ if parent is not None else None
     elif isinstance(operand, OR):
         operand.node_.parent = None
-        operand = AND(Not(operand.left_), Not(operand.right_), invert_=True)
+        operand = AND(Not(operand.left_), Not(operand.right_))
         operand.node_.parent = parent.node_ if parent is not None else None
     else:
         operand.invert_ = True
