@@ -443,33 +443,6 @@ class ConstrainingOperator(SymbolicExpression, ABC):
 
 
 @dataclass(eq=False)
-class UnaryOperator(ConstrainingOperator, ABC):
-    """
-    A base class for unary operators that can be used to apply operations on symbolic expressions.
-    """
-    operand_: HasDomain
-
-    def __post_init__(self):
-        super().__post_init__()
-        if not isinstance(self.operand_, SymbolicExpression):
-            self.operand_ = Variable.from_domain_(self.operand_)
-
-    @property
-    def name_(self):
-        return f"{self.operation} {self.operand_.name}"
-
-    @property
-    @lru_cache(maxsize=None)
-    def leaves_(self) -> HashedIterable[HasDomain]:
-        return self.operand_.leaves_
-
-    @property
-    @lru_cache(maxsize=None)
-    def all_leaf_instances_(self) -> List[HasDomain]:
-        return self.operand_.all_leaf_instances_
-
-
-@dataclass(eq=False)
 class BinaryOperator(ConstrainingOperator, ABC):
     """
     A base class for binary operators that can be used to combine symbolic expressions.
@@ -482,9 +455,9 @@ class BinaryOperator(ConstrainingOperator, ABC):
 
     def __post_init__(self):
         if not isinstance(self.left_, SymbolicExpression):
-            self.left_ = Variable.from_domain_(self.left_)
+            self.left_ = Variable.from_domain_([self.left_])
         if not isinstance(self.right_, SymbolicExpression):
-            self.right_ = Variable.from_domain_(self.right_)
+            self.right_ = Variable.from_domain_([self.right_])
         super().__post_init__()
         for operand in [self.left_, self.right_]:
             operand.node_.parent = self.node_

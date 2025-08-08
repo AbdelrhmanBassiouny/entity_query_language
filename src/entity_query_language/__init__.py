@@ -1,11 +1,11 @@
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import logging
 
 logger = logging.Logger("eql")
 logger.setLevel(logging.INFO)
 
-from .entity import entity, an, let, the
+from .entity import entity, an, let, the, set_of
 from .symbolic import symbol, And, Or, Not, contains, in_
 from .failures import MultipleSolutionFound
 

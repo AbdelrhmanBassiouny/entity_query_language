@@ -1,6 +1,7 @@
 # Example with `Not`
 
-Negation is important and tricky, but in EQL it's just fine :D.
+Negation is important and tricky. EQL tries to optimize the query when negation is used which greatly lowers wait time
+tof first response. This is done by avoiding evaluating all possibilities to evaluation the negation.
 
 ## Example Usage
 
@@ -33,5 +34,5 @@ assert len(results) == 2
 assert results[0].name == "Container2" and results[1].name == "Handle2"
 ```
 
-`body1` will execute successfully giving one solution wich is the body with the name `Body1`.
-`body` will raise an error is there is multiple bodies which have a name that starts with `Body`.
+Without the not this example yields `Container1` and `Handle1`, but with the not it yields the complement so
+`Container2` and `Handle2`.

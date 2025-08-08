@@ -33,5 +33,5 @@ assert len(results) == 2
 assert results[0].name == "Container1" and results[1].name == "Handle1"
 ```
 
-`body1` will execute successfully giving one solution wich is the body with the name `Body1`.
-`body` will raise an error is there is multiple bodies which have a name that starts with `Body`.
+This way of writing `And`, `Or` is exactly like constructing a tree which allows for the user to write in the same
+structure as how the computation is done internally.

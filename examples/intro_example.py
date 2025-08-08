@@ -1,5 +1,5 @@
-from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not
-from dataclasses import dataclass
+from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not, in_, set_of
+from dataclasses import dataclass, field
 from typing_extensions import List
 
 
@@ -65,3 +65,60 @@ result = an(entity(body := let(type_=Body, domain=world.bodies),
 results = list(result)
 assert len(results) == 2
 assert results[1].name == "Container2" and results[0].name == "Handle2"
+
+world2 = World(2, [Body("Container3"), Body("Handle3"), Body("Handle2")])
+
+result = an(entity(body := let(type_=Body, domain=world2.bodies),
+                   And(body.name.startswith('H'), in_(body, world.bodies))
+                   )
+            )
+results = list(result)
+assert len(results) == 1
+assert results[0].name == "Handle2"
+
+
+@dataclass
+class Connection:
+    parent: Body
+    child: Body
+
+
+@dataclass
+class Prismatic(Connection):
+    ...
+
+
+@dataclass
+class Fixed(Connection):
+    ...
+
+
+@dataclass
+class World:
+    id_: int
+    bodies: List[Body]
+    connections: List[Connection] = field(default_factory=list)
+
+
+world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
+c1_c2 = Prismatic(world.bodies[0], world.bodies[1])
+c2_h2 = Fixed(world.bodies[1], world.bodies[3])
+world.connections = [c1_c2, c2_h2]
+
+parent_container = let(type_=Body, domain=world.bodies)
+prismatic_connection = let(type_=Prismatic, domain=world.connections)
+drawer_body = let(type_=Body, domain=world.bodies)
+fixed_connection = let(type_=Fixed, domain=world.connections)
+handle = let(type_=Body, domain=world.bodies)
+
+drawer_kinematic_tree = (parent_container, prismatic_connection, drawer_body, fixed_connection, handle)
+result = an(set_of(drawer_kinematic_tree,
+                   And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                       drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                   )
+            )
+results = list(result)
+assert len(results) == 1
+assert results[0][parent_container].name == "Container1"
+assert results[0][drawer_body].name == "Container2"
+assert results[0][handle].name == "Handle2"

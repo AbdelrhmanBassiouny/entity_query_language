@@ -5,5 +5,8 @@ format: jb-book
 root: intro
 chapters:
 - file: example_with_the
+- file: example_with_and_or
+- file: example_with_not
+- file: example_with_joining_multiple_sources
 - file: bibliography
 - file: autoapi/index
