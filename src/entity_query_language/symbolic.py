@@ -379,8 +379,9 @@ class DomainMapping(HasDomain, ABC):
     def evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self.child_.evaluate__(sources)
-        if self.root_ is self:
-            for v in self:
+        if (self.root_ is self) or isinstance(self.parent_, LogicalOperator):
+            for child_v in child_val:
+                v = self.apply_(child_v)
                 if (not self.invert_ and v.value) or (self.invert_ and not v.value):
                     yield HashedIterable(values={self.leaf_id_: self.leaf_.domain_[v.id_]})
         else:
@@ -594,17 +595,6 @@ class LogicalOperator(BinaryOperator, ABC):
         self.operation_ = self.__class__.__name__
         super().__post_init__()
 
-    @staticmethod
-    def check(node: HasDomain, value: Union[HashedValue, HashedIterable]) \
-            -> Optional[HashedIterable]:
-        if not isinstance(node, ConstrainingOperator):
-            if value.value:
-                return HashedIterable(values={node.leaf_id_: node.leaf_.domain_[value.id_]})
-            else:
-                return None
-        else:
-            return value
-
 
 @dataclass(eq=False)
 class AND(LogicalOperator):
@@ -624,10 +614,6 @@ class AND(LogicalOperator):
         # constrain left values by available sources
         left_values = self.left_.evaluate__(left_sources)
         for left_value in left_values:
-            # Check left value, if result is False, continue to next left value.
-            left_value = self.check(self.left_, left_value)
-            if not left_value:
-                continue
 
             values_for_right_leaves = {(k, left_value[k]) for k in right_values_leaf_ids if k in left_value}
             if seen_left_values and values_for_right_leaves.issubset(seen_left_values):
@@ -637,18 +623,18 @@ class AND(LogicalOperator):
 
             # update the sources
             sources = sources.union(left_value)
+
             # constrain right values by available sources
             right_values = self.right_.evaluate__(sources)
 
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
-                right_value = self.check(self.right_, right_value)
-                if not right_value:
-                    continue
 
                 sources = sources.union(right_value)
+
                 yield sources
+
             sources = copy(original_sources)
 
 
@@ -658,7 +644,7 @@ class OR(LogicalOperator):
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
 
-    def evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None):
+    def evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
         Constrain the symbolic expression based on the indices of the operands.
         This method overrides the base class method to handle OR logic.
@@ -669,19 +655,18 @@ class OR(LogicalOperator):
 
         # constrain left values by available sources
         for operand in [self.left_, self.right_]:
-            # import pdb; pdb.set_trace()
+
             operand_sources = copy(original_sources)
             operand_values = operand.evaluate__(operand_sources)
 
             for operand_value in operand_values:
+
                 # Check operand value, if result is False, continue to next operand value.
-                operand_value = self.check(operand, operand_value)
-                if not operand_value:
-                    continue
                 if operand_value not in seen_values:
                     seen_values.add(operand_value)
                     operand_sources = operand_sources.union(operand_value)
                     yield operand_sources
+
                 operand_sources = copy(original_sources)
 
 

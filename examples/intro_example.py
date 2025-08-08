@@ -59,7 +59,7 @@ assert results[0].name == "Container1" and results[1].name == "Handle1"
 result = an(entity(body := let(type_=Body, domain=world.bodies),
                    Not(And(Or(body.name.startswith("C"), body.name.endswith("1")),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
-                       )), show_tree=True
+                       ))
                    )
             )
 results = list(result)
