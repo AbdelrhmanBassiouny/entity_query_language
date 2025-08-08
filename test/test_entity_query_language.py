@@ -119,9 +119,9 @@ def test_generate_with_and_or(handles_and_containers_world):
         yield from an(entity(body := let(type_=Body, domain=world.bodies),
                              And(Or(contains(body.name, "Handle"),
                                     contains(body.name, '1'))
-                                , Or(contains(body.name, 'Container'),
+                                 , Or(contains(body.name, 'Container'),
                                       contains(body.name, '1'))
-                                )
+                                 )
                              )
                       )
 
@@ -209,7 +209,7 @@ def test_not_or(handles_and_containers_world):
     world = handles_and_containers_world
     not_handle1_or2 = an(entity(body := let(type_=Body, domain=world.bodies),
                                 Not(contains(body.name, "Handle1") | contains(body.name, 'Handle2')),
-                                show_tree=True)
+                                show_tree=False)
                          )
 
     all_not_handle1_or2 = list(not_handle1_or2)
