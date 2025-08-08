@@ -4,5 +4,6 @@
 format: jb-book
 root: intro
 chapters:
+- file: example_with_the
 - file: bibliography
 - file: autoapi/index
