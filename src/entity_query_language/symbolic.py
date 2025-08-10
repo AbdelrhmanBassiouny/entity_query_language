@@ -324,22 +324,6 @@ class Variable(HasDomain):
     domain_: HashedIterable[Any] = field(default=None, kw_only=True)
     child_: Optional[SymbolicExpression] = field(default=None, kw_only=True)
 
-    def __post_init__(self):
-        super().__post_init__()
-        if self.domain_ is None and self.cls is not None:
-            def domain_gen():
-                cls_kwarg_gen = {k: iter(v) if is_iterable(v) else v for k, v in self.cls_kwargs_.items()}
-                while True:
-                    try:
-                        instance = self.cls_.__new__(self.cls_)
-                        for k, kwarg_gen in cls_kwarg_gen.items():
-                            setattr(instance, k, next(kwarg_gen) if is_iterable(kwarg_gen) else kwarg_gen)
-                        yield instance
-                    except StopIteration:
-                        break
-
-            self.domain_: HashedIterable = HashedIterable(domain_gen())
-
     def evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedValue]:
         """
         A variable does not need to evaluate anything by default.
@@ -348,6 +332,24 @@ class Variable(HasDomain):
         if self.id_ in sources:
             yield from (sources[self.id_],)
         else:
+            if self.domain_ is None and self.cls_ is not None:
+                def domain_gen():
+                    cls_kwargs = {k: iter(v) if isinstance(v, HasDomain) else v for k, v in self.cls_kwargs_.items()}
+                    symbolic_vars = []
+                    for k, v in self.cls_kwargs_.items():
+                        if isinstance(v, HasDomain):
+                            symbolic_vars.append(v)
+                    while True:
+                        try:
+                            instance = self.cls_(**{k: next(v) if k in symbolic_vars else v for k, v in cls_kwargs.items()})
+                            # instance = self.cls_.__new__(self.cls_)
+                            # for k, kwarg_gen in cls_kwarg_gen.items():
+                            #     setattr(instance, k, next(kwarg_gen) if k in symbolic_vars else kwarg_gen)
+                            yield instance
+                        except StopIteration:
+                            break
+
+                self.domain_: HashedIterable = HashedIterable(domain_gen())
             yield from self
 
     @property

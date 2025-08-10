@@ -3,7 +3,7 @@ import pytest
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import contains, in_, And, Or, Not
-from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection
+from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer
 
 
 def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
@@ -234,3 +234,27 @@ def test_not_and_or(handles_and_containers_world):
     assert all(
         h.name not in ["Handle1", "Container1"] for h in
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
+
+def test_generate_drawers(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    container = let(type_=Container, domain=world.bodies)
+    handle = let(type_=Handle, domain=world.bodies)
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    drawer_components = (container, handle, fixed_connection, prismatic_connection)
+
+    solutions = an(entity(Drawer(handle=handle, container=container),
+                          And(container == fixed_connection.parent,
+                              handle == fixed_connection.child,
+                              container == prismatic_connection.child
+                              )
+                          )
+                   )
+
+    all_solutions = list(solutions)
+    assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+    for sol in all_solutions:
+        assert sol[container] == sol[fixed_connection].parent
+        assert sol[handle] == sol[fixed_connection].child
+        assert sol[prismatic_connection].child == sol[fixed_connection].parent
