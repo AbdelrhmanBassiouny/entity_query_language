@@ -1,4 +1,5 @@
-from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not, in_, set_of
+from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not, in_, set_of, \
+    SymbolicMode, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -100,6 +101,14 @@ class World:
     connections: List[Connection] = field(default_factory=list)
 
 
+@symbol
+@dataclass
+class Drawer:
+    handle: Body
+    body: Body
+
+
+
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
 c1_c2 = Prismatic(world.bodies[0], world.bodies[1])
 c2_h2 = Fixed(world.bodies[1], world.bodies[3])
@@ -122,3 +131,16 @@ assert len(results) == 1
 assert results[0][parent_container].name == "Container1"
 assert results[0][drawer_body].name == "Container2"
 assert results[0][handle].name == "Handle2"
+
+
+# Write the query body
+with SymbolicMode():
+    result = an(entity(Drawer(handle=handle, body=drawer_body),
+                       And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                           drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                       )
+                )
+results = list(result)
+assert len(results) == 1
+assert results[0].body.name == "Container2"
+assert results[0].handle.name == "Handle2"

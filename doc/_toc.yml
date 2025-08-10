@@ -8,5 +8,6 @@ chapters:
 - file: example_with_and_or
 - file: example_with_not
 - file: example_with_joining_multiple_sources
+- file: example_with_inference
 - file: bibliography
 - file: autoapi/index
