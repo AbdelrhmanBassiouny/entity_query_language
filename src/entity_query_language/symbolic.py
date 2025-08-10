@@ -111,6 +111,15 @@ class HashedIterable(Generic[T]):
         """
         return self.values[id_]
 
+    def __setitem__(self, id_: int, value: HashedValue[T]):
+        """
+        Set the HashedValue by its id.
+
+        :param id_: The id of the HashedValue to set.
+        :param value: The HashedValue to set.
+        """
+        self.values[id_] = value
+
     def __copy__(self):
         """
         Create a shallow copy of the HashedIterable.
@@ -173,6 +182,9 @@ class SymbolicExpression(ABC):
                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         seen_values = set()
         for v in self.evaluate__(sources):
+            for var in selected_vars:
+                if var.id_ not in v:
+                    v[var.id_] = next(var.evaluate__(v))
             v = HashedIterable(values={var.id_: v[var.id_] for var in selected_vars})
             if v not in seen_values:
                 seen_values.add(v)
@@ -334,23 +346,21 @@ class Variable(HasDomain):
         else:
             if self.domain_ is None and self.cls_ is not None:
                 def domain_gen():
-                    cls_kwargs = {k: iter(v) if isinstance(v, HasDomain) else v for k, v in self.cls_kwargs_.items()}
+                    cls_kwargs = {k: v.evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in self.cls_kwargs_.items()}
                     symbolic_vars = []
                     for k, v in self.cls_kwargs_.items():
                         if isinstance(v, HasDomain):
                             symbolic_vars.append(v)
                     while True:
                         try:
-                            instance = self.cls_(**{k: next(v) if k in symbolic_vars else v for k, v in cls_kwargs.items()})
-                            # instance = self.cls_.__new__(self.cls_)
-                            # for k, kwarg_gen in cls_kwarg_gen.items():
-                            #     setattr(instance, k, next(kwarg_gen) if k in symbolic_vars else kwarg_gen)
-                            yield instance
+                            instance = self.cls_(**{k: next(v).value if k in symbolic_vars else v.value for k, v in cls_kwargs.items()})
+                            yield HashedValue(instance)
                         except StopIteration:
                             break
 
-                self.domain_: HashedIterable = HashedIterable(domain_gen())
-            yield from self
+                yield from domain_gen()
+            else:
+                yield from self
 
     @property
     def name_(self):

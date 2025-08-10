@@ -2,7 +2,7 @@ import pytest
 
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import contains, in_, And, Or, Not
+from entity_query_language.symbolic import contains, in_, And, Or, Not, SymbolicMode
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer
 
 
@@ -260,19 +260,19 @@ def test_generate_drawers(handles_and_containers_world):
     handle = let(type_=Handle, domain=world.bodies)
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
     prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
-    drawer_components = (container, handle, fixed_connection, prismatic_connection)
-
-    solutions = an(entity(Drawer(handle=handle, container=container),
-                          And(container == fixed_connection.parent,
-                              handle == fixed_connection.child,
-                              container == prismatic_connection.child
+    with SymbolicMode():
+        solutions = an(entity(Drawer(handle=handle, container=container),
+                              And(container == fixed_connection.parent,
+                                  handle == fixed_connection.child,
+                                  container == prismatic_connection.child
+                                  )
                               )
-                          )
-                   )
+                       )
 
     all_solutions = list(solutions)
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
-    for sol in all_solutions:
-        assert sol[container] == sol[fixed_connection].parent
-        assert sol[handle] == sol[fixed_connection].child
-        assert sol[prismatic_connection].child == sol[fixed_connection].parent
+    assert all(isinstance(d, Drawer) for d in all_solutions)
+    assert all_solutions[0].handle.name == "Handle3"
+    assert all_solutions[0].container.name == "Container3"
+    assert all_solutions[1].handle.name == "Handle1"
+    assert all_solutions[1].container.name == "Container1"
