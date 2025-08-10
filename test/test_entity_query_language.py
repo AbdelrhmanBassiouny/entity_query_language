@@ -235,6 +235,24 @@ def test_not_and_or(handles_and_containers_world):
         h.name not in ["Handle1", "Container1"] for h in
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
 
+
+def test_not_and_or_with_domain_mapping(handles_and_containers_world):
+    world = handles_and_containers_world
+    not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
+                                               Not(And(Or(body.name.startswith("Handle"),
+                                                          body.name.endswith('1'))
+                                                      , Or(body.name.startswith('Container'),
+                                                            body.name.endswith('1'))
+                                                      ))
+                                               )
+                                        )
+
+    all_not_handle1_and_not_container1 = list(not_handle1_and_not_container1)
+    assert len(all_not_handle1_and_not_container1) == 4, "Should generate 4 bodies"
+    assert all(
+        h.name not in ["Handle1", "Container1"] for h in
+        all_not_handle1_and_not_container1), "All generated items should satisfy query"
+
 def test_generate_drawers(handles_and_containers_world):
     world = handles_and_containers_world
 
