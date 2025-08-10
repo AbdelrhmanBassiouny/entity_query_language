@@ -55,6 +55,7 @@ object instance and use them as part of the query conditions.
 - [Example with `And` + `OR`](example_with_and_or.md): This shows an example of using `And` with `Or` together.
 - [Example with `Not`](example_with_not.md): This shows an example of using `Not`.
 - [Example with Joining Multiple Sources](example_with_joining_multiple_sources.md): This shows an example of using and joining multiple sources in your query. 
+- [Example with Inference](example_with_inference.md): This shows an example of writing inference rules in EQL.
 
 ## To Cite:
 
