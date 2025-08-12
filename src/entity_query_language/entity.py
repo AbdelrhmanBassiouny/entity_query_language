@@ -21,18 +21,18 @@ def an_or_the(entity_: Entity[T], func: Union[Type[An], Type[The]],
               show_tree: bool = False) -> Union[An[T], The[T]]:
     root = func(entity_)
     if show_tree:
-        render_tree(root.node_, True, view=True)
+        render_tree(root._node_, True, view=True)
     return root
 
 
 def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool]) -> Entity[T]:
     expression = And(*properties) if len(properties) > 1 else properties[0]
-    return Entity(child_=expression, selected_variable_=selected_variable)
+    return Entity(_child_=expression, selected_variable_=selected_variable)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
     expression = And(*properties) if len(properties) > 1 else properties[0]
-    return SetOf(child_=expression, selected_variables_=selected_variables)
+    return SetOf(_child_=expression, selected_variables_=selected_variables)
 
 def let(type_: Type[T], domain: Optional[Any] = None) -> T:
     return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
