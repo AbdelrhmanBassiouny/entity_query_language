@@ -35,4 +35,4 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     return SetOf(child_=expression, selected_variables_=selected_variables)
 
 def let(type_: Type[T], domain: Optional[Any] = None) -> T:
-    return Variable.from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
+    return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
