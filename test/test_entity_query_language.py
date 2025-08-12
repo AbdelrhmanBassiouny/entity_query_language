@@ -117,11 +117,8 @@ def test_generate_with_and_or(handles_and_containers_world):
 
     def generate_handles_and_container1():
         yield from an(entity(body := let(type_=Body, domain=world.bodies),
-                             And(Or(contains(body.name, "Handle"),
-                                    contains(body.name, '1'))
-                                 , Or(contains(body.name, 'Container'),
-                                      contains(body.name, '1'))
-                                 )
+                             Or(contains(body.name, "Handle"), contains(body.name, '1'))
+                             , Or(contains(body.name, 'Container'), contains(body.name, '1'))
                              )
                       )
 
@@ -134,8 +131,8 @@ def test_generate_with_multi_and(handles_and_containers_world):
 
     def generate_container1():
         yield from an(entity(body := let(type_=Body, domain=world.bodies),
-                             contains(body.name, "n") & contains(body.name, '1')
-                             & contains(body.name, 'C')))
+                             contains(body.name, "n"), contains(body.name, '1')
+                             , contains(body.name, 'C')))
 
     all_solutions = list(generate_container1())
     assert len(all_solutions) == 1, "Should generate one container."
@@ -153,10 +150,9 @@ def test_generate_with_more_than_one_source(handles_and_containers_world):
     drawer_components = (container, handle, fixed_connection, prismatic_connection)
 
     solutions = an(set_of(drawer_components,
-                          And(container == fixed_connection.parent,
-                              handle == fixed_connection.child,
-                              container == prismatic_connection.child
-                              )
+                          container == fixed_connection.parent,
+                          handle == fixed_connection.child,
+                          container == prismatic_connection.child
                           )
                    )
 
@@ -241,9 +237,9 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
                                                Not(And(Or(body.name.startswith("Handle"),
                                                           body.name.endswith('1'))
-                                                      , Or(body.name.startswith('Container'),
+                                                       , Or(body.name.startswith('Container'),
                                                             body.name.endswith('1'))
-                                                      ))
+                                                       ))
                                                )
                                         )
 
@@ -252,6 +248,7 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     assert all(
         h.name not in ["Handle1", "Container1"] for h in
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
+
 
 def test_generate_drawers(handles_and_containers_world):
     world = handles_and_containers_world
