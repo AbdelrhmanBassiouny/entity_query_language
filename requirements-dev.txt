@@ -5,3 +5,4 @@ pygraphviz>=1.7
 pydot
 pdbpp
 pytest
+omegaconf

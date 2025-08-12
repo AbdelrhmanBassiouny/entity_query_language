@@ -10,6 +10,7 @@ from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
 from typing_extensions import dataclass_transform, List, Tuple
 
+from .failures import MultipleSolutionFound
 from .utils import is_iterable
 from .utils import make_list, IDGenerator
 
@@ -147,7 +148,7 @@ id_generator = IDGenerator()
 
 
 @dataclass(eq=False)
-class SymbolicExpression(ABC):
+class SymbolicExpression(Generic[T], ABC):
     child_: Optional[SymbolicExpression] = field(init=False)
     id_: int = field(init=False, repr=False, default=None)
     node_: Node = field(init=False, default=None, repr=False)
@@ -180,6 +181,8 @@ class SymbolicExpression(ABC):
 
     def evaluate_(self, selected_vars: Iterable[HasDomain],
                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        if isinstance(selected_vars, HasDomain):
+            selected_vars = [selected_vars]
         seen_values = set()
         for v in self.evaluate__(sources):
             for var in selected_vars:
@@ -203,6 +206,18 @@ class SymbolicExpression(ABC):
         if self.node_.parent is not None:
             return self.node_.parent._expression
         return None
+
+    @property
+    def conditions_root_(self) -> SymbolicExpression:
+        """
+        Get the root of the symbolic expression tree that contains conditions.
+        """
+        conditions_root = self.root_
+        while conditions_root.child_ is not None:
+            conditions_root = conditions_root.child_
+            if isinstance(conditions_root.parent_, Entity):
+                break
+        return conditions_root
 
     @property
     def root_(self) -> SymbolicExpression:
@@ -282,6 +297,75 @@ class SymbolicExpression(ABC):
 
     def __hash__(self):
         return hash(id(self))
+
+
+
+@dataclass(eq=False)
+class The(SymbolicExpression[T], Generic[T]):
+    child_: Entity[T]
+
+    @property
+    def name_(self) -> str:
+        return f"The({self.child_.name_})"
+
+    def evaluate(self) -> T:
+        return self.evaluate__()
+
+    def evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
+        sol_gen = self.child_.evaluate__(sources)
+        first_val = next(sol_gen)
+        try:
+            second_val = next(sol_gen)
+        except StopIteration:
+            return first_val
+        else:
+            raise MultipleSolutionFound(first_val, second_val)
+
+
+@dataclass(eq=False)
+class An(SymbolicExpression[T]):
+    child_: Entity[T]
+
+    @property
+    def name_(self) -> str:
+        return f"An({self.child_.name_})"
+
+    def evaluate(self) -> Iterable[T]:
+        yield from self.evaluate__()
+
+    def evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+        yield from self.child_.evaluate__(sources)
+
+
+
+@dataclass(eq=False)
+class SetOf(SymbolicExpression[T]):
+    child_: SymbolicExpression
+    selected_variables_: Iterable[HasDomain]
+
+    @property
+    def name_(self) -> str:
+        return f"SetOf({self.child_.name_})"
+
+    def evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Dict[HasDomain, Any]]:
+        sol_gen = self.child_.evaluate_(self.selected_variables_, sources)
+        for sol in sol_gen:
+            yield {var: sol[var.id_].value for var in self.selected_variables_ if var.id_ in sol}
+
+
+@dataclass(eq=False)
+class Entity(SymbolicExpression[T]):
+    child_: SymbolicExpression
+    selected_variable_: T
+
+    @property
+    def name_(self) -> str:
+        return f"Entity({self.selected_variable_.name_})"
+
+    def evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+        sol_gen = self.child_.evaluate_(self.selected_variable_)
+        for sol in sol_gen:
+            yield sol[self.selected_variable_.id_].value
 
 
 @dataclass(eq=False)
@@ -391,7 +475,7 @@ class DomainMapping(HasDomain, ABC):
     def evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self.child_.evaluate__(sources)
-        if (self.root_ is self) or isinstance(self.parent_, LogicalOperator):
+        if (self.conditions_root_ is self) or isinstance(self.parent_, LogicalOperator):
             for child_v in child_val:
                 v = self.apply_(child_v)
                 if (not self.invert_ and v.value) or (self.invert_ and not v.value):
