@@ -5,7 +5,7 @@ import logging
 logger = logging.Logger("eql")
 logger.setLevel(logging.INFO)
 
-from .entity import entity, an, let, the, set_of
-from .symbolic import symbol, And, Or, Not, contains, in_, SymbolicMode
+from .entity import entity, an, let, the, set_of, And, Or, contains, in_
+from .symbolic import symbol, SymbolicMode, Not
 from .failures import MultipleSolutionFound
 

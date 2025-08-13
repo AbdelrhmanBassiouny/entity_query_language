@@ -5,6 +5,7 @@ from abc import abstractmethod, ABC
 from copy import copy
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Any
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
@@ -728,20 +729,6 @@ def symbol(cls):
     return cls
 
 
-def And(*conditions):
-    """
-    A symbolic AND operation that can be used to combine multiple symbolic expressions.
-    """
-    return chained_logic(AND, *conditions)
-
-
-def Or(*conditions):
-    """
-    A symbolic OR operation that can be used to combine multiple symbolic expressions.
-    """
-    return chained_logic(OR, *conditions)
-
-
 def Not(operand: Any) -> SymbolicExpression:
     """
     A symbolic NOT operation that can be used to negate symbolic expressions.
@@ -755,33 +742,3 @@ def Not(operand: Any) -> SymbolicExpression:
     else:
         operand._invert_ = True
     return operand
-
-
-def chained_logic(operator: Type[LogicalOperator], *conditions):
-    """
-    A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
-
-    :param operator: The symbolic operator to apply between the conditions.
-    :param conditions: The conditions to be chained.
-    """
-    prev_operation = None
-    for condition in conditions:
-        if prev_operation is None:
-            prev_operation = condition
-            continue
-        prev_operation = operator(prev_operation, condition)
-    return prev_operation
-
-
-def contains(container, item):
-    """
-    Check if the symbolic expression contains a specific item.
-    """
-    return in_(item, container)
-
-
-def in_(item, container):
-    """
-    Check if the symbolic expression is in another iterable or symbolic expression.
-    """
-    return Comparator(item, 'in', container)

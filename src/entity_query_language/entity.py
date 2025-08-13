@@ -3,7 +3,7 @@ from typing import TypeVar, Type
 
 from typing_extensions import Any, Optional, Union, Iterable
 
-from .symbolic import SymbolicExpression, And, Entity, SetOf, The, An, Variable
+from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, LogicalOperator, Comparator
 from .utils import render_tree
 
 T = TypeVar('T')  # Define type variable "T"
@@ -37,3 +37,47 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
 
 def let(type_: Type[T], domain: Optional[Any] = None) -> T:
     return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
+
+
+def And(*conditions):
+    """
+    A symbolic AND operation that can be used to combine multiple symbolic expressions.
+    """
+    return chained_logic(AND, *conditions)
+
+
+def Or(*conditions):
+    """
+    A symbolic OR operation that can be used to combine multiple symbolic expressions.
+    """
+    return chained_logic(OR, *conditions)
+
+
+def chained_logic(operator: Type[LogicalOperator], *conditions):
+    """
+    A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
+
+    :param operator: The symbolic operator to apply between the conditions.
+    :param conditions: The conditions to be chained.
+    """
+    prev_operation = None
+    for condition in conditions:
+        if prev_operation is None:
+            prev_operation = condition
+            continue
+        prev_operation = operator(prev_operation, condition)
+    return prev_operation
+
+
+def contains(container, item):
+    """
+    Check if the symbolic expression contains a specific item.
+    """
+    return in_(item, container)
+
+
+def in_(item, container):
+    """
+    Check if the symbolic expression is in another iterable or symbolic expression.
+    """
+    return Comparator(item, 'in', container)

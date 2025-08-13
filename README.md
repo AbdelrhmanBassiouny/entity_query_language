@@ -17,7 +17,8 @@ Read the documentation [here](https://abdelrhmanbassiouny.github.io/entity_query
 
 An important feature of EQL is that you do not need to do operations like JOIN in SQL, this is performed implicitly.
 EQL tries to mirror your intent in a query statement with as less boiler plate code as possiple.
-For example an attribute access with and equal check to another value is just how you expect:
+For example an attribute access with an equality check to another value is as simple as using python's dot notation with
+the equality operator. For example:
 
 ```python
 from entity_query_language import entity, an, let

@@ -4,7 +4,8 @@ import pytest
 
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import contains, in_, And, Or, Not, SymbolicMode
+from entity_query_language.symbolic import SymbolicMode
+from entity_query_language import And, Or, Not, contains, in_
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer
 
 
