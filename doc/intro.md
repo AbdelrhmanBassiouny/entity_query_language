@@ -37,7 +37,7 @@ world = World(1, [Body("Body1"), Body("Body2")])
 
 results_generator = an(entity(body := let(type_=Body, domain=world.bodies),
                               And(contains(body.name,"2"), body.name.startswith("Body")))
-                       )
+                       ).evaluate()
 results = list(results_generator)
 assert len(results) == 1
 assert results[0].name == "Body2"

@@ -71,7 +71,7 @@ with SymbolicMode():
                        And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                        )
-                )
+                ).evaluate()
 results = list(result)
 assert len(results) == 1
 assert results[0].body.name == "Container2"

@@ -9,11 +9,11 @@ from .utils import render_tree
 T = TypeVar('T')  # Define type variable "T"
 
 
-def an(entity_: Entity[T], show_tree: bool = False) -> An[T]:
+def an(entity_: Union[SetOf[T], Entity[T]], show_tree: bool = False) -> An[T]:
     return an_or_the(entity_, An, show_tree)
 
 
-def the(entity_: Entity[T], show_tree: bool = False) -> The[T]:
+def the(entity_: Union[SetOf[T], Entity[T]], show_tree: bool = False) -> The[T]:
     return an_or_the(entity_, The, show_tree)
 
 

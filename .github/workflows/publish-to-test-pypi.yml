@@ -1,6 +1,8 @@
 name: Publish Python distribution to PyPI and TestPyPI
 on:
   push:
+    tags:
+      - 'v*'  # Only trigger on tags starting with 'v'
     branches:
       - main  # Only run on pushes to the main branch
 jobs:

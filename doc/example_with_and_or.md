@@ -27,7 +27,7 @@ result = an(entity(body := let(type_=Body, domain=world.bodies),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        )
                    )
-            )
+            ).evaluate()
 results = list(result)
 assert len(results) == 2
 assert results[0].name == "Container1" and results[1].name == "Handle1"

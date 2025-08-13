@@ -31,16 +31,16 @@ world = World(1, [Body("Body1"), Body("Body2")])
 
 results_generator = an(entity(body := let(type_=Body, domain=world.bodies),
                               And(contains(body.name, "2"), body.name.startswith("Body")))
-                       )
+                       ).evaluate()
 results = list(results_generator)
 assert len(results) == 1
 assert results[0].name == "Body2"
 
 
 world = World(1, [Body("Body1"), Body("Body2")])
-body1 = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body1")))
+body1 = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body1"))).evaluate()
 try:
-    body = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body")))
+    body = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body"))).evaluate()
     assert False
 except MultipleSolutionFound:
     pass
@@ -51,7 +51,7 @@ result = an(entity(body := let(type_=Body, domain=world.bodies),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        )
                    )
-            )
+            ).evaluate()
 results = list(result)
 assert len(results) == 2
 assert results[0].name == "Container1" and results[1].name == "Handle1"
@@ -62,7 +62,7 @@ result = an(entity(body := let(type_=Body, domain=world.bodies),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        ))
                    )
-            )
+            ).evaluate()
 results = list(result)
 assert len(results) == 2
 assert results[1].name == "Container2" and results[0].name == "Handle2"
@@ -72,7 +72,7 @@ world2 = World(2, [Body("Container3"), Body("Handle3"), Body("Handle2")])
 result = an(entity(body := let(type_=Body, domain=world2.bodies),
                    And(body.name.startswith('H'), in_(body, world.bodies))
                    )
-            )
+            ).evaluate()
 results = list(result)
 assert len(results) == 1
 assert results[0].name == "Handle2"
@@ -125,7 +125,7 @@ result = an(set_of(drawer_kinematic_tree,
                    And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
                        drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                    )
-            )
+            ).evaluate()
 results = list(result)
 assert len(results) == 1
 assert results[0][parent_container].name == "Container1"
@@ -139,7 +139,7 @@ with SymbolicMode():
                        And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                        )
-                )
+                ).evaluate()
 results = list(result)
 assert len(results) == 1
 assert results[0].body.name == "Container2"
