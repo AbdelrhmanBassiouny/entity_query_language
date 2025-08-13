@@ -1,7 +1,6 @@
 from __future__ import annotations
-from typing import TypeVar, Type
 
-from typing_extensions import Any, Optional, Union, Iterable
+from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
     chained_logic

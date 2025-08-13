@@ -260,17 +260,20 @@ class SymbolicExpression(Generic[T], ABC):
         return hash(id(self))
 
 
+@dataclass(eq=False)
+class ResultQuantifier(SymbolicExpression[T], ABC):
+    _child_: Entity[T]
+
+    def evaluate(self) -> Iterable[T]:
+        return self._evaluate__()
+
 
 @dataclass(eq=False)
-class The(SymbolicExpression[T], Generic[T]):
-    _child_: Entity[T]
+class The(ResultQuantifier[T]):
 
     @property
     def _name_(self) -> str:
         return f"The({self._child_._name_})"
-
-    def evaluate(self) -> T:
-        return self._evaluate__()
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
         sol_gen = self._child_._evaluate__(sources)
@@ -284,15 +287,11 @@ class The(SymbolicExpression[T], Generic[T]):
 
 
 @dataclass(eq=False)
-class An(SymbolicExpression[T]):
-    _child_: Entity[T]
+class An(ResultQuantifier[T]):
 
     @property
     def _name_(self) -> str:
         return f"An({self._child_._name_})"
-
-    def evaluate(self) -> Iterable[T]:
-        yield from self._evaluate__()
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
         yield from self._child_._evaluate__(sources)
