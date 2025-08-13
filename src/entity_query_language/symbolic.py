@@ -44,8 +44,8 @@ class HashedValue(Generic[T]):
 
     def __post_init__(self):
         if self.id_ is None:
-            if hasattr(self.value, "id_"):
-                self.id_ = self.value.id_
+            if hasattr(self.value, "_id_"):
+                self.id_ = self.value._id_
             else:
                 self.id_ = id(self.value)
 
@@ -127,8 +127,7 @@ class HashedIterable(Generic[T]):
 
         :return: A new HashedIterable instance with the same values.
         """
-        # iterable_copy, self.iterable = itertools.tee(self.iterable, 2)
-        return HashedIterable(values=self.values.copy())  # , iterable=iterable_copy)
+        return HashedIterable(values=self.values.copy())
 
     def __contains__(self, item):
         return item in self.values
@@ -534,19 +533,19 @@ class BinaryOperator(ConstrainingOperator, ABC):
     """
     A base class for binary operators that can be used to combine symbolic expressions.
     """
-    left_: SymbolicExpression
-    operation_: str
-    right_: SymbolicExpression
+    left: SymbolicExpression
+    operation: str
+    right: SymbolicExpression
     _child_: SymbolicExpression = field(init=False, default=None)
     _invert__: bool = field(init=False, default=False)
 
     def __post_init__(self):
-        if not isinstance(self.left_, SymbolicExpression):
-            self.left_ = Variable._from_domain_([self.left_])
-        if not isinstance(self.right_, SymbolicExpression):
-            self.right_ = Variable._from_domain_([self.right_])
+        if not isinstance(self.left, SymbolicExpression):
+            self.left = Variable._from_domain_([self.left])
+        if not isinstance(self.right, SymbolicExpression):
+            self.right = Variable._from_domain_([self.right])
         super().__post_init__()
-        for operand in [self.left_, self.right_]:
+        for operand in [self.left, self.right]:
             operand._node_.parent = self._node_
 
     @property
@@ -558,32 +557,32 @@ class BinaryOperator(ConstrainingOperator, ABC):
         if value == self._invert__:
             return
         self._invert__ = value
-        prev_operation = copy(self.operation_)
-        match self.operation_:
+        prev_operation = copy(self.operation)
+        match self.operation:
             case "<":
-                self.operation_ = ">=" if self._invert_ else self.operation_
+                self.operation = ">=" if self._invert_ else self.operation
             case ">":
-                self.operation_ = "<=" if self._invert_ else self.operation_
+                self.operation = "<=" if self._invert_ else self.operation
             case "<=":
-                self.operation_ = ">" if self._invert_ else self.operation_
+                self.operation = ">" if self._invert_ else self.operation
             case ">=":
-                self.operation_ = "<" if self._invert_ else self.operation_
+                self.operation = "<" if self._invert_ else self.operation
             case "==":
-                self.operation_ = "!=" if self._invert_ else self.operation_
+                self.operation = "!=" if self._invert_ else self.operation
             case "!=":
-                self.operation_ = "==" if self._invert_ else self.operation_
+                self.operation = "==" if self._invert_ else self.operation
             case "in":
-                self.operation_ = "not in" if self._invert_ else self.operation_
-        self._node_.name = self._node_.name.replace(prev_operation, self.operation_)
+                self.operation = "not in" if self._invert_ else self.operation
+        self._node_.name = self._node_.name.replace(prev_operation, self.operation)
 
     @property
     def _name_(self):
-        return self.operation_
+        return self.operation
 
     @property
     @lru_cache(maxsize=None)
     def _leaves_(self) -> HashedIterable[HasDomain]:
-        return self.left_._leaves_ | self.right_._leaves_
+        return self.left._leaves_ | self.right._leaves_
 
     @property
     @lru_cache(maxsize=None)
@@ -592,7 +591,7 @@ class BinaryOperator(ConstrainingOperator, ABC):
         Get the leaf instances of the symbolic expression.
         This is useful for accessing the leaves of the symbolic expression tree.
         """
-        return self.left_._all_leaf_instances_ + self.right_._all_leaf_instances_
+        return self.left._all_leaf_instances_ + self.right._all_leaf_instances_
 
 
 @dataclass(eq=False)
@@ -600,8 +599,8 @@ class Comparator(BinaryOperator):
     """
     A symbolic equality check that can be used to compare symbolic variables.
     """
-    left_: HasDomain
-    right_: HasDomain
+    left: HasDomain
+    right: HasDomain
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[HashedIterable]:
         """
@@ -616,30 +615,30 @@ class Comparator(BinaryOperator):
         source and the source has been exhausted.
         """
         sources = sources or HashedIterable()
-        if self.right_._leaf_id_ not in sources:
-            left_values = self.left_._evaluate__(sources)
+        if self.right._leaf_id_ not in sources:
+            left_values = self.left._evaluate__(sources)
             for left_value in left_values:
-                right_values = self.right_._evaluate__(sources)
+                right_values = self.right._evaluate__(sources)
                 for right_value in right_values:
                     res = self.check(left_value, right_value)
                     if res:
                         yield res
 
         else:
-            right_values = self.right_._evaluate__(sources)
+            right_values = self.right._evaluate__(sources)
             for right_value in right_values:
-                left_values = self.left_._evaluate__(sources)
+                left_values = self.left._evaluate__(sources)
                 for left_value in left_values:
                     res = self.check(left_value, right_value)
                     if res:
                         yield res
 
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
-        satisfied = eval(f"left_value.value {self.operation_} right_value.value")
+        satisfied = eval(f"left_value.value {self.operation} right_value.value")
         if satisfied:
-            left_leaf_value = self.left_._leaf_._domain_[left_value.id_]
-            right_leaf_value = self.right_._leaf_._domain_[right_value.id_]
-            return HashedIterable(values={self.left_._leaf_id_: left_leaf_value, self.right_._leaf_id_: right_leaf_value})
+            left_leaf_value = self.left._leaf_._domain_[left_value.id_]
+            right_leaf_value = self.right._leaf_._domain_[right_value.id_]
+            return HashedIterable(values={self.left._leaf_id_: left_leaf_value, self.right._leaf_id_: right_leaf_value})
         else:
             return None
 
@@ -649,10 +648,10 @@ class LogicalOperator(BinaryOperator, ABC):
     """
     A symbolic operation that can be used to combine multiple symbolic expressions.
     """
-    operation_: str = field(init=False)
+    operation: str = field(init=False)
 
     def __post_init__(self):
-        self.operation_ = self.__class__.__name__
+        self.operation = self.__class__.__name__
         super().__post_init__()
 
 
@@ -665,14 +664,12 @@ class AND(LogicalOperator):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
 
         # init an empty source if none is provided
-        original_sources = sources or HashedIterable()
-        sources = copy(original_sources)
-        left_sources = copy(sources)
-        right_values_leaf_ids = [leaf.id_ for leaf in self.right_._leaves_]
+        sources = sources or HashedIterable()
+        right_values_leaf_ids = [leaf.id_ for leaf in self.right._leaves_]
         seen_left_values = set()
 
         # constrain left values by available sources
-        left_values = self.left_._evaluate__(left_sources)
+        left_values = self.left._evaluate__(sources)
         for left_value in left_values:
 
             values_for_right_leaves = {(k, left_value[k]) for k in right_values_leaf_ids if k in left_value}
@@ -681,21 +678,13 @@ class AND(LogicalOperator):
             else:
                 seen_left_values.update(values_for_right_leaves)
 
-            # update the sources
-            sources = sources.union(left_value)
-
             # constrain right values by available sources
-            right_values = self.right_._evaluate__(sources)
+            right_values = self.right._evaluate__(left_value)
 
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
-
-                sources = sources.union(right_value)
-
-                yield sources
-
-            sources = copy(original_sources)
+                yield left_value.union(right_value)
 
 
 @dataclass(eq=False)
@@ -710,24 +699,20 @@ class OR(LogicalOperator):
         This method overrides the base class method to handle OR logic.
         """
         # init an empty source if none is provided
-        original_sources = sources or HashedIterable()
+        sources = sources or HashedIterable()
         seen_values = set()
 
         # constrain left values by available sources
-        for operand in [self.left_, self.right_]:
+        for operand in [self.left, self.right]:
 
-            operand_sources = copy(original_sources)
-            operand_values = operand._evaluate__(operand_sources)
+            operand_values = operand._evaluate__(sources)
 
             for operand_value in operand_values:
 
                 # Check operand value, if result is False, continue to next operand value.
                 if operand_value not in seen_values:
                     seen_values.add(operand_value)
-                    operand_sources = operand_sources.union(operand_value)
-                    yield operand_sources
-
-                operand_sources = copy(original_sources)
+                    yield sources.union(operand_value)
 
 
 @dataclass_transform()
@@ -764,9 +749,9 @@ def Not(operand: Any) -> SymbolicExpression:
     if not isinstance(operand, SymbolicExpression):
         operand = Variable._from_domain_(operand)
     if isinstance(operand, AND):
-        operand = OR(Not(operand.left_), Not(operand.right_))
+        operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
-        operand = AND(Not(operand.left_), Not(operand.right_))
+        operand = AND(Not(operand.left), Not(operand.right))
     else:
         operand._invert_ = True
     return operand

@@ -34,5 +34,6 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     expression = And(*properties) if len(properties) > 1 else properties[0]
     return SetOf(_child_=expression, selected_variables_=selected_variables)
 
+
 def let(type_: Type[T], domain: Optional[Any] = None) -> T:
     return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
