@@ -38,7 +38,7 @@ class World:
 
 world = World(1, [Body("Body1"), Body("Body2")])
 
-results_generator = an(entity(body := let(type_=Body, domain=world.bodies), body.name == "Body2"))
+results_generator = an(entity(body := let(type_=Body, domain=world.bodies), body.name == "Body2")).evaluate()
 results = list(results_generator)
 assert results[0].name == "Body2"
 ```
@@ -53,6 +53,6 @@ equal to "Body1".
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {0.0.1},
+version = {0.2.12},
 }
 ```
