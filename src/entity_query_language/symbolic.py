@@ -267,6 +267,25 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     def evaluate(self) -> Iterable[T]:
         return self._evaluate__()
 
+    def except_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
+        """
+        Exclude results that match the given conditions.
+        """
+        new_conditions_root = self._conditions_root_ & chained_logic(AND, *conditions)
+        new_conditions_root._node_.parent = self._child_._node_
+        return self
+
+    def else_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
+        new_conditions_root = self._conditions_root_ | chained_logic(AND, *conditions)
+        new_conditions_root._node_.parent = self._child_._node_
+        return self
+
+    def set(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
+        ...
+
+    def add(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
+        ...
+
 
 @dataclass(eq=False)
 class The(ResultQuantifier[T]):
