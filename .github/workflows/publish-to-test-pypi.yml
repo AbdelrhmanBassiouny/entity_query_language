@@ -3,8 +3,8 @@ on:
   push:
     tags:
       - 'v*'    # Only run when pushing tags like v1.2.3
-    branches:
-      - main    # Tag must be on main
+#    branches:
+#      - main    # Tag must be on main
 jobs:
   build:
     name: Build distribution
