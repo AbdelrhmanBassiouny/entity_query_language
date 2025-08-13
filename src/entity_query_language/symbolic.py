@@ -247,18 +247,6 @@ class SymbolicExpression(Generic[T], ABC):
     def _children_(self) -> List[SymbolicExpression]:
         return [c._expression for c in self._node_.children]
 
-    def __getattr__(self, name):
-        return Attribute(self, name)
-
-    def __call__(self, *args, **kwargs):
-        return Call(self, args, kwargs)
-
-    def __eq__(self, other):
-        return Comparator(self, '==', other)
-
-    def __contains__(self, item):
-        return Comparator(item, 'in', self)
-
     def __and__(self, other):
         return AND(self, other)
 
@@ -267,21 +255,6 @@ class SymbolicExpression(Generic[T], ABC):
 
     def __invert__(self):
         return Not(self)
-
-    def __ne__(self, other):
-        return Comparator(self, '!=', other)
-
-    def __lt__(self, other):
-        return Comparator(self, '<', other)
-
-    def __le__(self, other):
-        return Comparator(self, '<=', other)
-
-    def __gt__(self, other):
-        return Comparator(self, '>', other)
-
-    def __ge__(self, other):
-        return Comparator(self, '>=', other)
 
     def __hash__(self):
         return hash(id(self))
@@ -369,6 +342,33 @@ class HasDomain(SymbolicExpression, ABC):
     def __iter__(self):
         yield from self._domain_
 
+    def __getattr__(self, name):
+        return Attribute(self, name)
+
+    def __call__(self, *args, **kwargs):
+        return Call(self, args, kwargs)
+
+    def __eq__(self, other):
+        return Comparator(self, '==', other)
+
+    def __contains__(self, item):
+        return Comparator(item, 'in', self)
+
+    def __ne__(self, other):
+        return Comparator(self, '!=', other)
+
+    def __lt__(self, other):
+        return Comparator(self, '<', other)
+
+    def __le__(self, other):
+        return Comparator(self, '<=', other)
+
+    def __gt__(self, other):
+        return Comparator(self, '>', other)
+
+    def __ge__(self, other):
+        return Comparator(self, '>=', other)
+
     @property
     @lru_cache(maxsize=None)
     def _leaf_id_(self):
@@ -399,6 +399,9 @@ class HasDomain(SymbolicExpression, ABC):
         if self._child_ is not None and hasattr(self._child_, '_all_leaf_instances_'):
             child_leaves = self._child_._all_leaf_instances_
         return [self] + child_leaves
+
+    def __hash__(self):
+        return hash(id(self))
 
 
 @dataclass(eq=False)
