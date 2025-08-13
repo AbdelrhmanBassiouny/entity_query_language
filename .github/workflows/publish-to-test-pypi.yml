@@ -12,6 +12,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # needed to see tags
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -26,12 +28,12 @@ jobs:
 
     - name: Set version from tag
       run: |
-        TAG="${GITHUB_REF#refs/tags/}"   # e.g., v0.2.6
-        VERSION="${TAG#v}"               # strip the 'v'
+        TAG="${GITHUB_REF#refs/tags/}"   # e.g., v0.2.9
+        VERSION="${TAG#v}"               # remove leading 'v'
         echo "Detected version: $VERSION"
         
-        # Update version in pyproject.toml
-        sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
+        # Update __version__ in your package
+        sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" entity_query_language/__init__.py
 
     - name: Clean old builds
       run: rm -rf dist build *.egg-info
