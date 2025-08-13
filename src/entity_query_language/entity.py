@@ -3,7 +3,8 @@ from typing import TypeVar, Type
 
 from typing_extensions import Any, Optional, Union, Iterable
 
-from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, LogicalOperator, Comparator
+from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
+    chained_logic
 from .utils import render_tree
 
 T = TypeVar('T')  # Define type variable "T"
@@ -51,22 +52,6 @@ def Or(*conditions):
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
     return chained_logic(OR, *conditions)
-
-
-def chained_logic(operator: Type[LogicalOperator], *conditions):
-    """
-    A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
-
-    :param operator: The symbolic operator to apply between the conditions.
-    :param conditions: The conditions to be chained.
-    """
-    prev_operation = None
-    for condition in conditions:
-        if prev_operation is None:
-            prev_operation = condition
-            continue
-        prev_operation = operator(prev_operation, condition)
-    return prev_operation
 
 
 def contains(container, item):

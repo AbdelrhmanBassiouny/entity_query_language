@@ -5,7 +5,7 @@ from abc import abstractmethod, ABC
 from copy import copy
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any
+from typing import Any, Type
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
@@ -742,3 +742,19 @@ def Not(operand: Any) -> SymbolicExpression:
     else:
         operand._invert_ = True
     return operand
+
+
+def chained_logic(operator: Type[LogicalOperator], *conditions):
+    """
+    A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
+
+    :param operator: The symbolic operator to apply between the conditions.
+    :param conditions: The conditions to be chained.
+    """
+    prev_operation = None
+    for condition in conditions:
+        if prev_operation is None:
+            prev_operation = condition
+            continue
+        prev_operation = operator(prev_operation, condition)
+    return prev_operation
