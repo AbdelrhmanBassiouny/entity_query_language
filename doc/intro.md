@@ -3,8 +3,7 @@
 
 Welcome to the Entity Query Language package!
 
-EQL is a relational query language that is pythonic, and intuitive. This serves as a front end
-to other query languages like sql or prolog.
+EQL is a relational query language that is pythonic, and intuitive.
 
 The interface side of EQL is inspired by [euROBIN](https://www.eurobin-project.eu/) entity query language white paper.
 
