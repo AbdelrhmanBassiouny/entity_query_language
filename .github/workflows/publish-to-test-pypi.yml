@@ -24,6 +24,24 @@ jobs:
         build
         --user
 
+    - name: Set version from tag
+      run: |
+        TAG=${GITHUB_REF#refs/tags/}   # e.g., v0.2.6
+        VERSION=${TAG#v}               # strip the "v"
+        echo "Detected version: $VERSION"
+        
+        # If pyproject.toml
+        sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+        
+        # If setup.cfg
+        # sed -i "s/^version = .*/version = $VERSION/" setup.cfg
+        
+        # If setup.py
+        # sed -i "s/version=.*/version=\"$VERSION\",/" setup.py
+
+    - name: Clean old builds
+      run: rm -rf dist build *.egg-info
+
     - name: Build a binary wheel and a source tarball
       run: python3 -m build
 
