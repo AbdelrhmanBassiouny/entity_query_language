@@ -11,6 +11,7 @@ from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
 from typing_extensions import dataclass_transform, List, Tuple
 
+from .enums import RDREdge
 from .failures import MultipleSolutionFound
 from .utils import is_iterable
 from .utils import make_list, IDGenerator
@@ -277,12 +278,23 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         """
         Exclude results that match the given conditions.
         """
-        new_conditions_root = self._conditions_root_ & chained_logic(AND, *conditions)
+        new_branch = chained_logic(AND, *conditions)
+        new_conditions_root = self._conditions_root_ & new_branch
+        new_branch._node_.weight = RDREdge.Refinement
         new_conditions_root._node_.parent = self._child_._node_
         return self
 
     def else_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
-        new_conditions_root = self._conditions_root_ ^ chained_logic(AND, *conditions)
+        new_branch = chained_logic(AND, *conditions)
+        new_conditions_root = self._conditions_root_ ^ new_branch
+        new_branch._node_.weight = RDREdge.Alternative
+        new_conditions_root._node_.parent = self._child_._node_
+        return self
+
+    def also_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
+        new_branch = chained_logic(OR, *conditions)
+        new_conditions_root = self._conditions_root_ | new_branch
+        new_branch._node_.weight = RDREdge.Next
         new_conditions_root._node_.parent = self._child_._node_
         return self
 
@@ -302,6 +314,10 @@ class Conclusion(SymbolicExpression[T], ABC):
     value: Any
     _parent__: HasDomain
     _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._node_.weight = RDREdge.Then
 
     @property
     def _parent_(self) -> HasDomain:
