@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import contextvars
+import operator
 from abc import abstractmethod, ABC
-from copy import copy
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Type
+from typing import Callable
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
@@ -316,7 +316,6 @@ class An(ResultQuantifier[T]):
         yield from self._child_._evaluate__(sources)
 
 
-
 @dataclass(eq=False)
 class SetOf(SymbolicExpression[T]):
     _child_: SymbolicExpression
@@ -367,25 +366,25 @@ class HasDomain(SymbolicExpression, ABC):
         return Call(self, args, kwargs)
 
     def __eq__(self, other):
-        return Comparator(self, '==', other)
+        return Comparator(self, other, operator.eq)
 
     def __contains__(self, item):
-        return Comparator(item, 'in', self)
+        return Comparator(item, self, operator.contains)
 
     def __ne__(self, other):
-        return Comparator(self, '!=', other)
+        return Comparator(self, other, operator.ne)
 
     def __lt__(self, other):
-        return Comparator(self, '<', other)
+        return Comparator(self, other, operator.lt)
 
     def __le__(self, other):
-        return Comparator(self, '<=', other)
+        return Comparator(self, other, operator.le)
 
     def __gt__(self, other):
-        return Comparator(self, '>', other)
+        return Comparator(self, other, operator.gt)
 
     def __ge__(self, other):
-        return Comparator(self, '>=', other)
+        return Comparator(self, other, operator.ge)
 
     @property
     @lru_cache(maxsize=None)
@@ -424,7 +423,7 @@ class HasDomain(SymbolicExpression, ABC):
 
 @dataclass(eq=False)
 class Variable(HasDomain):
-    _cls_: Optional[Type] = field(default=None)
+    _cls_: Type
     _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
     _domain_: HashedIterable[Any] = field(default=None, kw_only=True)
     _child_: Optional[SymbolicExpression] = field(default=None, kw_only=True)
@@ -439,14 +438,16 @@ class Variable(HasDomain):
         else:
             if self._domain_ is None and self._cls_ is not None:
                 def domain_gen():
-                    cls_kwargs = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in self._cls_kwargs_.items()}
+                    cls_kwargs = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in
+                                  self._cls_kwargs_.items()}
                     symbolic_vars = []
                     for k, v in self._cls_kwargs_.items():
                         if isinstance(v, HasDomain):
                             symbolic_vars.append(v)
                     while True:
                         try:
-                            instance = self._cls_(**{k: next(v).value if k in symbolic_vars else v.value for k, v in cls_kwargs.items()})
+                            instance = self._cls_(**{k: next(v).value if k in symbolic_vars else v.value
+                                                     for k, v in cls_kwargs.items()})
                             yield HashedValue(instance)
                         except StopIteration:
                             break
@@ -553,10 +554,8 @@ class BinaryOperator(ConstrainingOperator, ABC):
     A base class for binary operators that can be used to combine symbolic expressions.
     """
     left: SymbolicExpression
-    operation: str
     right: SymbolicExpression
     _child_: SymbolicExpression = field(init=False, default=None)
-    _invert__: bool = field(init=False, default=False)
 
     def __post_init__(self):
         if not isinstance(self.left, SymbolicExpression):
@@ -566,37 +565,6 @@ class BinaryOperator(ConstrainingOperator, ABC):
         super().__post_init__()
         for operand in [self.left, self.right]:
             operand._node_.parent = self._node_
-
-    @property
-    def _invert_(self):
-        return self._invert__
-
-    @_invert_.setter
-    def _invert_(self, value):
-        if value == self._invert__:
-            return
-        self._invert__ = value
-        prev_operation = copy(self.operation)
-        match self.operation:
-            case "<":
-                self.operation = ">=" if self._invert_ else self.operation
-            case ">":
-                self.operation = "<=" if self._invert_ else self.operation
-            case "<=":
-                self.operation = ">" if self._invert_ else self.operation
-            case ">=":
-                self.operation = "<" if self._invert_ else self.operation
-            case "==":
-                self.operation = "!=" if self._invert_ else self.operation
-            case "!=":
-                self.operation = "==" if self._invert_ else self.operation
-            case "in":
-                self.operation = "not in" if self._invert_ else self.operation
-        self._node_.name = self._node_.name.replace(prev_operation, self.operation)
-
-    @property
-    def _name_(self):
-        return self.operation
 
     @property
     @lru_cache(maxsize=None)
@@ -620,6 +588,42 @@ class Comparator(BinaryOperator):
     """
     left: HasDomain
     right: HasDomain
+    operation: Callable[[Any, Any], bool]
+    _invert__: bool = field(init=False, default=False)
+
+    @property
+    def _invert_(self):
+        return self._invert__
+
+    @_invert_.setter
+    def _invert_(self, value):
+        if value == self._invert__:
+            return
+        self._invert__ = value
+        prev_operation = self.operation
+        match self.operation:
+            case operator.lt:
+                self.operation = operator.ge if self._invert_ else self.operation
+            case operator.gt:
+                self.operation = operator.le if self._invert_ else self.operation
+            case operator.le:
+                self.operation = operator.gt if self._invert_ else self.operation
+            case operator.ge:
+                self.operation = operator.lt if self._invert_ else self.operation
+            case operator.eq:
+                self.operation = operator.ne if self._invert_ else self.operation
+            case operator.ne:
+                self.operation = operator.eq if self._invert_ else self.operation
+            case operator.contains:
+                def not_contains(a, b):
+                    return not operator.contains(a, b)
+
+                self.operation = not_contains if self._invert_ else self.operation
+        self._node_.name = self._node_.name.replace(prev_operation.__name__, self.operation.__name__)
+
+    @property
+    def _name_(self):
+        return self.operation.__name__
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[HashedIterable]:
         """
@@ -653,7 +657,7 @@ class Comparator(BinaryOperator):
                         yield res
 
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
-        satisfied = eval(f"left_value.value {self.operation} right_value.value")
+        satisfied = self.operation(left_value.value, right_value.value)
         if satisfied:
             left_leaf_value = self.left._leaf_._domain_[left_value.id_]
             right_leaf_value = self.right._leaf_._domain_[right_value.id_]
@@ -667,11 +671,10 @@ class LogicalOperator(BinaryOperator, ABC):
     """
     A symbolic operation that can be used to combine multiple symbolic expressions.
     """
-    operation: str = field(init=False)
 
-    def __post_init__(self):
-        self.operation = self.__class__.__name__
-        super().__post_init__()
+    @property
+    def _name_(self):
+        return self.__class__.__name__
 
 
 @dataclass(eq=False)

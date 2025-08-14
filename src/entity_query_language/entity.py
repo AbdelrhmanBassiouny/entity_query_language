@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import operator
+
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
@@ -64,4 +66,4 @@ def in_(item, container):
     """
     Check if the symbolic expression is in another iterable or symbolic expression.
     """
-    return Comparator(item, 'in', container)
+    return Comparator(container, item, operator.contains)
