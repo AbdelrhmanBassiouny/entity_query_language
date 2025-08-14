@@ -311,9 +311,13 @@ class Conclusion(SymbolicExpression[T], ABC):
 @dataclass(eq=False)
 class Set(Conclusion[T]):
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> None:
-        for v in self._parent_:
-            v.value = self.value
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
+        if self._parent_._id_ not in sources:
+            parent_value = next(iter(self._parent_._evaluate__(sources)))
+        else:
+            parent_value = sources[self._parent_._id_]
+        parent_value.value = self.value
+        return sources
 
     @property
     def _name_(self) -> str:
@@ -329,13 +333,10 @@ class Add(Conclusion[T]):
         if not isinstance(self.value, SymbolicExpression):
             self.value = Variable._from_domain_(self.value)
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        for v in self.value._evaluate__(sources):
-            self._parent_._domain_[v.id_] = v
-            if self._parent_._id_ in sources:
-                sources[self._parent__._id_] = v
-            else:
-                sources = sources.union(HashedIterable(values={self._parent_._id_: v}))
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
+        v = next(iter(self.value._evaluate__(sources)))
+        self._parent_._domain_[v.id_] = v
+        sources[self._parent_._leaf_id_] = v
         return sources
 
     @property
