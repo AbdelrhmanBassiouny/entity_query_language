@@ -153,6 +153,7 @@ class SymbolicExpression(Generic[T], ABC):
     _id_: int = field(init=False, repr=False, default=None)
     _node_: Node = field(init=False, default=None, repr=False)
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
+    _conclusion_: Optional[SymbolicExpression] = field(init=False, default=None)
 
     def __post_init__(self):
         self._id_ = id_generator(self)
@@ -185,6 +186,8 @@ class SymbolicExpression(Generic[T], ABC):
             selected_vars = [selected_vars]
         seen_values = set()
         for v in self._evaluate__(sources):
+            if self._conclusion_ is not None:
+                v = self._conclusion_._evaluate__(v)
             for var in selected_vars:
                 if var._id_ not in v:
                     v[var._id_] = next(var._evaluate__(v))
@@ -247,6 +250,9 @@ class SymbolicExpression(Generic[T], ABC):
     def _children_(self) -> List[SymbolicExpression]:
         return [c._expression for c in self._node_.children]
 
+    def __xor__(self, other) -> SymbolicExpression:
+        return ElseIf(self, other)
+
     def __and__(self, other):
         return AND(self, other)
 
@@ -276,15 +282,65 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         return self
 
     def else_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
-        new_conditions_root = self._conditions_root_ | chained_logic(AND, *conditions)
+        new_conditions_root = self._conditions_root_ ^ chained_logic(AND, *conditions)
         new_conditions_root._node_.parent = self._child_._node_
         return self
 
     def set(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
-        ...
+        return self._add_conclusion_(var, value, Set)
 
     def add(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
-        ...
+        return self._add_conclusion_(var, value, Add)
+
+    def _add_conclusion_(self, var: HasDomain, value: Any, type_: Type[Conclusion[T]]) -> ResultQuantifier[T]:
+        self._conditions_root_._conclusion_ = type_(value, var)
+        return self
+
+
+@dataclass(eq=False)
+class Conclusion(SymbolicExpression[T], ABC):
+    value: Any
+    _parent__: HasDomain
+    _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
+
+    @property
+    def _parent_(self) -> HasDomain:
+        return self._parent__
+
+
+@dataclass(eq=False)
+class Set(Conclusion[T]):
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> None:
+        for v in self._parent_:
+            v.value = self.value
+
+    @property
+    def _name_(self) -> str:
+        return f"Set({self._parent_._name_}, {self.value})"
+
+
+@dataclass(eq=False)
+class Add(Conclusion[T]):
+    value: SymbolicExpression
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.value, SymbolicExpression):
+            self.value = Variable._from_domain_(self.value)
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        for v in self.value._evaluate__(sources):
+            self._parent_._domain_[v.id_] = v
+            if self._parent_._id_ in sources:
+                sources[self._parent__._id_] = v
+            else:
+                sources = sources.union(HashedIterable(values={self._parent_._id_: v}))
+        return sources
+
+    @property
+    def _name_(self) -> str:
+        return f"Add({self._parent_._name_}, {self.value})"
 
 
 @dataclass(eq=False)
@@ -735,6 +791,37 @@ class OR(LogicalOperator):
                 if operand_value not in seen_values:
                     seen_values.add(operand_value)
                     yield sources.union(operand_value)
+
+
+@dataclass(eq=False)
+class ElseIf(LogicalOperator):
+    """
+    A symbolic ElseIf operation that can be used to combine multiple symbolic expressions.
+    """
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        """
+        Constrain the symbolic expression based on the indices of the operands.
+        This method overrides the base class method to handle ElseIf logic.
+        """
+        # init an empty source if none is provided
+        sources = sources or HashedIterable()
+        seen_values = set()
+
+        # constrain left values by available sources
+        for operand in [self.left, self.right]:
+
+            operand_values = operand._evaluate__(sources)
+            entered = False
+
+            for operand_value in operand_values:
+                entered = True
+                # Check operand value, if result is False, continue to next operand value.
+                if operand_value not in seen_values:
+                    seen_values.add(operand_value)
+                    yield sources.union(operand_value)
+            if entered:
+                break
 
 
 @dataclass_transform()

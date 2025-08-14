@@ -273,3 +273,26 @@ def test_generate_drawers(handles_and_containers_world):
     assert all_solutions[0].container.name == "Container3"
     assert all_solutions[1].handle.name == "Handle1"
     assert all_solutions[1].container.name == "Container1"
+
+
+def test_add_conclusion(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    container = let(type_=Container, domain=world.bodies)
+    handle = let(type_=Handle, domain=world.bodies)
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    with SymbolicMode():
+        solutions = an(entity(drawers := let(type_=Drawer, domain=[]),
+                              And(container == fixed_connection.parent,
+                                  handle == fixed_connection.child,
+                                  container == prismatic_connection.child))
+                       ).add(drawers, Drawer(handle=handle, container=container)).evaluate()
+
+    all_solutions = list(solutions)
+    assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+    assert all(isinstance(d, Drawer) for d in all_solutions)
+    assert all_solutions[0].handle.name == "Handle3"
+    assert all_solutions[0].container.name == "Container3"
+    assert all_solutions[1].handle.name == "Handle1"
+    assert all_solutions[1].container.name == "Container1"
