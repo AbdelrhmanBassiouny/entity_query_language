@@ -9,6 +9,7 @@ from typing_extensions import List, TYPE_CHECKING, Callable, Any
 @dataclass
 class BodyConf:
     name: str = MISSING
+    size: int = field(default=1)
 
 
 @dataclass
@@ -34,6 +35,11 @@ class FixedConnectionConf(Connection):
 
 @dataclass
 class PrismaticConnectionConf(Connection):
+    pass
+
+
+@dataclass
+class RevoluteConnectionConf(Connection):
     pass
 
 

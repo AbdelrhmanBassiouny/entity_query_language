@@ -13,7 +13,7 @@ from typing_extensions import dataclass_transform, List, Tuple
 
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
-from .utils import is_iterable
+from .utils import is_iterable, render_tree
 from .utils import make_list, IDGenerator
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
@@ -27,12 +27,19 @@ def in_symbolic_mode():
     return _symbolic_mode.get()
 
 
-class SymbolicMode:
+@dataclass
+class SymbolicRule:
+    query: Optional[SymbolicExpression] = None
+
     def __enter__(self):
+        if self.query is not None:
+            self.query.__enter__()
         _set_symbolic_mode(True)
         return self  # optional, depending on whether you want to assign `as` variable
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.query is not None:
+            self.query.__exit__(exc_type, exc_val, exc_tb)
         _set_symbolic_mode(False)
 
 
@@ -155,6 +162,7 @@ class SymbolicExpression(Generic[T], ABC):
     _node_: Node = field(init=False, default=None, repr=False)
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
     _conclusion_: Optional[SymbolicExpression] = field(init=False, default=None)
+    _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
 
     def __post_init__(self):
         self._id_ = id_generator(self)
@@ -211,6 +219,15 @@ class SymbolicExpression(Generic[T], ABC):
             return self._node_.parent._expression
         return None
 
+    @_parent_.setter
+    def _parent_(self, value: Optional[SymbolicExpression]):
+        self._node_.parent = value._node_ if value is not None else None
+        if value is not None and hasattr(value, '_child_') and value._child_ is not None:
+            value._child_ = self
+
+    def _render_tree_(self):
+        render_tree(self._root_._node_, True, view=True)
+
     @property
     def _conditions_root_(self) -> SymbolicExpression:
         """
@@ -251,6 +268,12 @@ class SymbolicExpression(Generic[T], ABC):
     def _children_(self) -> List[SymbolicExpression]:
         return [c._expression for c in self._node_.children]
 
+    @classmethod
+    def _current_parent_(cls) -> Optional[SymbolicExpression]:
+        if cls._symbolic_expression_stack_:
+            return cls._symbolic_expression_stack_[-1]
+        return None
+
     def __xor__(self, other) -> SymbolicExpression:
         return ElseIf(self, other)
 
@@ -262,6 +285,16 @@ class SymbolicExpression(Generic[T], ABC):
 
     def __invert__(self):
         return Not(self)
+
+    def __enter__(self):
+        node = self
+        if isinstance(node, (ResultQuantifier, Entity)):
+            node = node._conditions_root_
+        SymbolicExpression._symbolic_expression_stack_.append(node)
+        return self
+
+    def __exit__(self, *args):
+        SymbolicExpression._symbolic_expression_stack_.pop()
 
     def __hash__(self):
         return hash(id(self))
@@ -298,30 +331,33 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         new_conditions_root._node_.parent = self._child_._node_
         return self
 
-    def set(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
-        return self._add_conclusion_(var, value, Set)
 
-    def add(self, var: HasDomain, value: Any) -> ResultQuantifier[T]:
-        return self._add_conclusion_(var, value, Add)
-
-    def _add_conclusion_(self, var: HasDomain, value: Any, type_: Type[Conclusion[T]]) -> ResultQuantifier[T]:
-        self._conditions_root_._conclusion_ = type_(value, var)
-        return self
+def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
+    """
+    Exclude results that match the given conditions.
+    """
+    new_branch = chained_logic(AND, *conditions)
+    prev_parent = SymbolicExpression._current_parent_()._parent_
+    new_conditions_root = SymbolicExpression._current_parent_() & new_branch
+    new_branch._node_.weight = RDREdge.Refinement
+    new_conditions_root._parent_ = prev_parent
+    return new_conditions_root
 
 
 @dataclass(eq=False)
 class Conclusion(SymbolicExpression[T], ABC):
+    var: HasDomain
     value: Any
-    _parent__: HasDomain
     _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
 
     def __post_init__(self):
         super().__post_init__()
         self._node_.weight = RDREdge.Then
-
-    @property
-    def _parent_(self) -> HasDomain:
-        return self._parent__
+        current_parent = SymbolicExpression._current_parent_()
+        if current_parent is None:
+            current_parent = self._conditions_root_
+        self._parent_ = current_parent
+        current_parent._conclusion_ = self
 
 
 @dataclass(eq=False)
@@ -342,7 +378,6 @@ class Set(Conclusion[T]):
 
 @dataclass(eq=False)
 class Add(Conclusion[T]):
-    value: SymbolicExpression
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -351,13 +386,13 @@ class Add(Conclusion[T]):
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         v = next(iter(self.value._evaluate__(sources)))
-        self._parent_._domain_[v.id_] = v
-        sources[self._parent_._leaf_id_] = v
+        self.var._domain_[v.id_] = v
+        sources[self.var._leaf_id_] = v
         return sources
 
     @property
     def _name_(self) -> str:
-        return f"Add({self._parent_._name_}, {self.value})"
+        return f"Add({self.var._name_}, {self.value})"
 
 
 @dataclass(eq=False)
@@ -411,7 +446,7 @@ class Entity(SymbolicExpression[T]):
 
     @property
     def _name_(self) -> str:
-        return f"Entity({self.selected_variable_.name_})"
+        return f"Entity({self.selected_variable_._name_})"
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
         sol_gen = self._child_._evaluate_(self.selected_variable_)

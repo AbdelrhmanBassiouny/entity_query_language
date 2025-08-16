@@ -5,7 +5,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
-    chained_logic
+    chained_logic, HasDomain
 from .utils import render_tree
 
 T = TypeVar('T')  # Define type variable "T"
@@ -23,7 +23,7 @@ def an_or_the(entity_: Entity[T], func: Union[Type[An], Type[The]],
               show_tree: bool = False) -> Union[An[T], The[T]]:
     root = func(entity_)
     if show_tree:
-        render_tree(root._node_, True, view=True)
+        root._render_tree_()
     return root
 
 
@@ -37,7 +37,9 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     return SetOf(_child_=expression, selected_variables_=selected_variables)
 
 
-def let(type_: Type[T], domain: Optional[Any] = None) -> T:
+def let(type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain]:
+    if domain is None:
+        domain = []
     return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
 
 

@@ -4,39 +4,27 @@ from dataclasses import dataclass, field
 from typing_extensions import List, Callable
 
 from .base_config import WorldConf, BodyConf, Connection, FixedConnectionConf, PrismaticConnectionConf, \
-    ContainerConf, HandleConf
+    ContainerConf, RevoluteConnectionConf
 
 from ...factories.world import create_world
+from .handles_and_containers import Handle1, Handle2, Handle3, Container1
 
 
 @dataclass
-class Handle1(HandleConf):
-    name: str = "Handle1"
+class Body1(ContainerConf):
+    name: str = "Body1"
 
 
 @dataclass
-class Handle2(HandleConf):
-    name: str = "Handle2"
+class Body2(ContainerConf):
+    name: str = "Body2"
+    size: int = 2
 
 
 @dataclass
-class Handle3(HandleConf):
-    name: str = "Handle3"
+class Body3(ContainerConf):
+    name: str = "Body3"
 
-
-@dataclass
-class Container1(ContainerConf):
-    name: str = "Container1"
-
-
-@dataclass
-class Container2(ContainerConf):
-    name: str = "Container2"
-
-
-@dataclass
-class Container3(ContainerConf):
-    name: str = "Container3"
 
 
 def bodies():
@@ -44,9 +32,9 @@ def bodies():
         Handle1(),
         Handle2(),
         Handle3(),
-        Container3(),
-        Container1(),
-        Container2()
+        Body1(),
+        Body2(),
+        Body3()
     ]
 
 
@@ -54,11 +42,9 @@ def bodies():
 class World(WorldConf):
     bodies: List[BodyConf] = field(default_factory=bodies, init=False)
     connections: List[Connection] = field(default_factory=lambda: [
-        FixedConnectionConf(parent=Container1(), child=Container2()),
-        FixedConnectionConf(parent=Container3(), child=Handle3()),
-        PrismaticConnectionConf(parent=Container2(), child=Container1()),
-        PrismaticConnectionConf(parent=Container2(), child=Container3()),
         FixedConnectionConf(parent=Container1(), child=Handle1()),
+        FixedConnectionConf(parent=Body2(), child=Handle2()),
+        RevoluteConnectionConf(parent=Body3(), child=Handle3())
     ], init=False)
     factory_method: Callable = field(default=create_world, init=False)
 

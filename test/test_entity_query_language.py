@@ -4,9 +4,10 @@ import pytest
 
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import SymbolicMode
+from entity_query_language.symbolic import SymbolicRule, Add, refinement
 from entity_query_language import And, Or, Not, contains, in_
-from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer
+from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
+    View
 
 
 def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
@@ -178,7 +179,8 @@ def test_the(handles_and_containers_world):
 
 def test_not_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle = an(entity(body := let(type_=Body, domain=world.bodies), Not(body.name.startswith("Handle")))).evaluate()
+    not_handle = an(
+        entity(body := let(type_=Body, domain=world.bodies), Not(body.name.startswith("Handle")))).evaluate()
     all_not_handles = list(not_handle)
     assert len(all_not_handles) == 3, "Should generate 3 not handles"
     assert all(isinstance(b, Container) for b in all_not_handles)
@@ -260,7 +262,7 @@ def test_generate_drawers(handles_and_containers_world):
     handle = let(type_=Handle, domain=world.bodies)
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
     prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
-    with SymbolicMode():
+    with SymbolicRule():
         solutions = an(entity(Drawer(handle=handle, container=container),
                               And(container == fixed_connection.parent,
                                   handle == fixed_connection.child,
@@ -282,13 +284,16 @@ def test_add_conclusion(handles_and_containers_world):
     handle = let(type_=Handle, domain=world.bodies)
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
     prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
-    with SymbolicMode():
-        solutions = an(entity(drawers := let(type_=Drawer, domain=[]),
-                              And(container == fixed_connection.parent,
-                                  handle == fixed_connection.child,
-                                  container == prismatic_connection.child))
-                       ).add(drawers, Drawer(handle=handle, container=container)).evaluate()
 
+    query = an(entity(drawers := let(type_=Drawer),
+                          And(container == fixed_connection.parent,
+                              handle == fixed_connection.child,
+                              container == prismatic_connection.child))
+                   )
+    with SymbolicRule(query):
+        Add(drawers, Drawer(handle=handle, container=container))
+
+    solutions = query.evaluate()
     all_solutions = list(solutions)
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
     assert all(isinstance(d, Drawer) for d in all_solutions)
@@ -298,3 +303,29 @@ def test_add_conclusion(handles_and_containers_world):
     assert all_solutions[1].container.name == "Container1"
     all_drawers = list(drawers)
     assert len(all_drawers) == 2, "Should generate components for two possible drawer."
+
+
+def test_rule_tree_builder(doors_and_drawers_world):
+    world = doors_and_drawers_world
+
+    body = let(type_=Body, domain=world.bodies)
+    container = let(type_=Container, domain=world.bodies)
+    handle = let(type_=Handle, domain=world.bodies)
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
+
+    query = an(entity(drawers_and_doors := let(type_=View),
+                      body == fixed_connection.parent,
+                      handle == fixed_connection.child))
+
+    with SymbolicRule(query):
+        with refinement(body.size > 1):
+            Add(drawers_and_doors, Door(handle=handle, body=body))
+        Add(drawers_and_doors, Drawer(handle=handle, container=body))
+
+    # query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    all_drawers_and_doors = list(drawers_and_doors)
+    assert len(all_drawers_and_doors) == 2, "Should generate components for two possible drawer."

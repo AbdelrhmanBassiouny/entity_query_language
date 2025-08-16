@@ -12,7 +12,7 @@ constructor. This is only possible in the `SymbolicMode` to avoid side effects.
 ## Example Usage
 
 ```python
-from entity_query_language import entity, let, an, And, in_, set_of, SymbolicMode, symbol
+from entity_query_language import entity, let, an, And, in_, set_of, SymbolicRule, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -26,8 +26,8 @@ class Body:
 class Connection:
     parent: Body
     child: Body
-    
-    
+
+
 @dataclass
 class Prismatic(Connection):
     ...
@@ -43,13 +43,14 @@ class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
-    
+
 
 @symbol
 @dataclass
 class Drawer:
     handle: Body
     body: Body
+
 
 # Create the world with its bodies and connections
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
@@ -66,7 +67,7 @@ fixed_connection = let(type_=Fixed, domain=world.connections)
 handle = let(type_=Body, domain=world.bodies)
 
 # Write the query body
-with SymbolicMode():
+with SymbolicRule():
     result = an(entity(Drawer(handle=handle, body=drawer_body),
                        And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)

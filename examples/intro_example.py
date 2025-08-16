@@ -1,5 +1,5 @@
 from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not, in_, set_of, \
-    SymbolicMode, symbol
+    SymbolicRule, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -134,7 +134,7 @@ assert results[0][handle].name == "Handle2"
 
 
 # Write the query body
-with SymbolicMode():
+with SymbolicRule():
     result = an(entity(Drawer(handle=handle, body=drawer_body),
                        And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)

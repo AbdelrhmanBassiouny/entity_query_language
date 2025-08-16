@@ -16,6 +16,7 @@ class WorldEntity:
 @dataclass(unsafe_hash=True)
 class Body(WorldEntity):
     name: str
+    size: int = field(default=1)
 
 
 @symbol
@@ -46,6 +47,12 @@ class FixedConnection(Connection):
 @symbol
 @dataclass(unsafe_hash=True)
 class PrismaticConnection(Connection):
+    ...
+
+
+@symbol
+@dataclass(unsafe_hash=True)
+class RevoluteConnection(Connection):
     ...
 
 
@@ -98,3 +105,9 @@ class Cabinet(View):
         if not isinstance(other, Cabinet):
             return False
         return self.container == other.container and self.drawers == other.drawers and self.world == other.world
+
+
+@dataclass(unsafe_hash=True)
+class Door(View):
+    handle: Handle
+    body: Body
