@@ -1,12 +1,14 @@
 from typing import Iterable
 
 import pytest
+from graphviz import render
 
 from datasets import World
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement
 from entity_query_language import And, Or, Not, contains, in_
+from entity_query_language.utils import render_tree
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View
 
@@ -183,6 +185,7 @@ def test_sources(handles_and_containers_world):
                           container == prismatic_connection.child
                           )
                    )
+    # render_tree(handle._sources_[0]._node_.root, use_dot_exporter=True, view=True)
     sources = query._sources_
     assert len(sources) == 1, "Should have one sources."
     assert sources[0] == world, "The source should be the world."
@@ -279,8 +282,7 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
 
 
 def test_generate_drawers(handles_and_containers_world):
-    world = handles_and_containers_world
-
+    world = let("world", type_=World, domain=handles_and_containers_world)
     container = let("container", type_=Container, domain=world.bodies)
     handle = let("handle", type_=Handle, domain=world.bodies)
     fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
@@ -329,26 +331,30 @@ def test_add_conclusion(handles_and_containers_world):
 
 
 def test_rule_tree_builder(doors_and_drawers_world):
-    world = doors_and_drawers_world
+    world = let("world", type_=World, domain=doors_and_drawers_world)
+    body = let("body", type_=Body, domain=world.bodies)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
 
-    body = let(type_=Body, domain=world.bodies)
-    container = let(type_=Container, domain=world.bodies)
-    handle = let(type_=Handle, domain=world.bodies)
-    fixed_connection = let(type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
-    revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
-
-    query = an(entity(drawers_and_doors := let(type_=View),
+    query = an(entity(drawers_and_doors := let("drawers_and_doors", type_=View),
                       body == fixed_connection.parent,
                       handle == fixed_connection.child))
 
     with SymbolicRule(query):
+        Add(drawers_and_doors, Drawer(handle=handle, container=body))
         with refinement(body.size > 1):
             Add(drawers_and_doors, Door(handle=handle, body=body))
-        Add(drawers_and_doors, Drawer(handle=handle, container=body))
 
     # query._render_tree_()
 
     all_solutions = list(query.evaluate())
-    all_drawers_and_doors = list(drawers_and_doors)
-    assert len(all_drawers_and_doors) == 2, "Should generate components for two possible drawer."
+    assert len(all_solutions) == 2, "Should generate 1 drawer and 1 door."
+    assert isinstance(all_solutions[0], Door)
+    assert all_solutions[0].handle.name == "Handle2"
+    assert all_solutions[0].body.name == "Body2"
+    assert isinstance(all_solutions[1], Drawer)
+    assert all_solutions[1].handle.name == "Handle1"
+    assert all_solutions[1].container.name == "Container1"

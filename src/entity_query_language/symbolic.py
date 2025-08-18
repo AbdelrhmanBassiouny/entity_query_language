@@ -46,22 +46,15 @@ class SymbolicRule:
 @dataclass_transform()
 def symbol(cls):
     orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
-    orig_getattr_ = cls.__getattr__ if '__getattr__' in cls.__dict__ else None
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
+            if len(args) > 0:
+                return Variable(args[0], symbolic_cls, _domain_=args[1])
             return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
         return orig_new(symbolic_cls)
 
-    def symbolic_getattr(self, name):
-        if in_symbolic_mode():
-            return Attribute(self, name)
-        if orig_getattr_ is not None:
-            return orig_getattr_(self, name)
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-
     cls.__new__ = symbolic_new
-    # cls.__getattr__ = symbolic_getattr
     return cls
 
 
@@ -442,18 +435,6 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         return self._child_._all_variable_instances_
 
 
-def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
-    """
-    Exclude results that match the given conditions.
-    """
-    new_branch = chained_logic(AND, *conditions)
-    prev_parent = SymbolicExpression._current_parent_()._parent_
-    new_conditions_root = SymbolicExpression._current_parent_() & new_branch
-    new_branch._node_.weight = RDREdge.Refinement
-    new_conditions_root._parent_ = prev_parent
-    return new_conditions_root
-
-
 @dataclass(eq=False)
 class Conclusion(SymbolicExpression[T], ABC):
     var: HasDomain
@@ -466,8 +447,11 @@ class Conclusion(SymbolicExpression[T], ABC):
         current_parent = SymbolicExpression._current_parent_()
         if current_parent is None:
             current_parent = self._conditions_root_
-        self._parent_ = current_parent
-        current_parent._conclusion_ = self
+        if isinstance(current_parent, ExceptIf):
+            self._parent_ = current_parent.right
+        else:
+            self._parent_ = current_parent
+        self._parent_._conclusion_ = self
 
     @property
     @lru_cache(maxsize=None)
@@ -545,8 +529,8 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             selected_vars = [selected_vars]
         seen_values = set()
         for v in self._child_._evaluate__(sources):
-            if self._child_._conclusion_ is not None:
-                v = self._child_._conclusion_._evaluate__(v)
+            for conclusion in self._child_._conclusions_:
+                v = conclusion._evaluate__(v)
             for var in selected_vars:
                 if var._id_ not in v:
                     v[var._id_] = next(var._evaluate__(v))
@@ -554,6 +538,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             if v not in seen_values:
                 seen_values.add(v)
                 yield v
+            self._conclusions_.clear()
 
     @property
     @lru_cache(maxsize=None)
@@ -1011,6 +996,8 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
+                if self._conclusion_:
+                    self._conclusions_.add(self._conclusion_)
                 yield left_value.union(right_value)
 
 
@@ -1042,6 +1029,18 @@ class OR(LogicalOperator):
                     yield sources.union(operand_value)
 
 
+def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
+    """
+    Exclude results that match the given conditions.
+    """
+    new_branch = chained_logic(AND, *conditions)
+    prev_parent = SymbolicExpression._current_parent_()._parent_
+    new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
+    new_branch._node_.weight = RDREdge.Refinement
+    new_conditions_root._parent_ = prev_parent
+    return new_conditions_root
+
+
 @dataclass(eq=False)
 class ExceptIf(LogicalOperator):
 
@@ -1067,10 +1066,10 @@ class ExceptIf(LogicalOperator):
             right_yielded = False
             for right_value in self.right._evaluate__(left_value):
                 right_yielded = True
+                self._conclusions_.remove(self.left._conclusion_)
                 self._conclusions_.add(self.right._conclusion_)
                 yield left_value.union(right_value)
             if not right_yielded:
-                self._conclusions_.add(self.left._conclusion_)
                 yield left_value
 
 

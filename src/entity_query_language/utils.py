@@ -414,7 +414,7 @@ class FilteredDotExporter(object):
 
 
 def render_tree(root: Node, use_dot_exporter: bool = False,
-                filename: str = "scrdr", only_nodes: List[Node] = None, show_in_console: bool = False,
+                filename: str = "query_tree", only_nodes: List[Node] = None, show_in_console: bool = False,
                 color_map: Optional[Callable[[Node], str]] = None,
                 view: bool = False) -> None:
     """
