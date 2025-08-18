@@ -181,10 +181,11 @@ def test_sources(handles_and_containers_world):
                           container == fixed_connection.parent,
                           handle == fixed_connection.child,
                           container == prismatic_connection.child
-                          ), show_tree=True
+                          )
                    )
     sources = query._sources_
-    assert len(sources) == 4, "Should have four sources."
+    assert len(sources) == 1, "Should have one sources."
+    assert sources[0] == world, "The source should be the world."
 
 def test_the(handles_and_containers_world):
     world = handles_and_containers_world

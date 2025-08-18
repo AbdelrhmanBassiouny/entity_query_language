@@ -220,7 +220,7 @@ class SymbolicExpression(Generic[T], ABC):
 
     def _create_node_(self, name: str):
         self._node_ = Node(name)
-        self._node_._expression = self
+        self._node_._expression_ = self
 
     @abstractmethod
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Union[HashedIterable, HashedValue]]:
@@ -233,7 +233,7 @@ class SymbolicExpression(Generic[T], ABC):
     @property
     def _parent_(self) -> Optional[SymbolicExpression]:
         if self._node_.parent is not None:
-            return self._node_.parent._expression
+            return self._node_.parent._expression_
         return None
 
     @_parent_.setter
@@ -262,15 +262,17 @@ class SymbolicExpression(Generic[T], ABC):
         """
         Get the root of the symbolic expression tree.
         """
-        return self._node_.root._expression
+        return self._node_.root._expression_
 
     @property
     @lru_cache(maxsize=None)
-    def _sources_(self) -> List[HasDomain]:
-        sources = []
-        for leaf in self._unique_variables_:
-            sources.extend(leaf.value._domain_sources_)
-        return sources
+    def _sources_(self) -> List[Source]:
+        sources = HashedIterable()
+        for variable in self._unique_variables_:
+            for source in variable.value._domain_sources_:
+                for leaf in source._node_.leaves:
+                    sources.add(leaf._expression_)
+        return [v.value for v in sources]
 
     @property
     @abstractmethod
@@ -287,11 +289,11 @@ class SymbolicExpression(Generic[T], ABC):
 
     @property
     def _descendants_(self) -> List[SymbolicExpression]:
-        return [d._expression for d in self._node_.descendants]
+        return [d._expression_ for d in self._node_.descendants]
 
     @property
     def _children_(self) -> List[SymbolicExpression]:
-        return [c._expression for c in self._node_.children]
+        return [c._expression_ for c in self._node_.children]
 
     @classmethod
     def _current_parent_(cls) -> Optional[SymbolicExpression]:
