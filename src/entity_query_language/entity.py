@@ -5,8 +5,8 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
-    chained_logic, HasDomain
-from .utils import render_tree
+    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType
+from .utils import render_tree, is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
 
@@ -37,10 +37,16 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     return SetOf(_child_=expression, selected_variables_=selected_variables)
 
 
-def let(type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain]:
+def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain, Source]:
     if domain is None:
-        domain = []
-    return Variable._from_domain_((v for v in domain if isinstance(v, type_)), clazz=type_)
+        return Variable(name, type_)
+    elif isinstance(domain, (HasDomain, Source)):
+        return Variable(name, type_, _domain_=HasType(_child_=domain, _type_=type_))
+    elif is_iterable(domain):
+        domain = HasType(_child_=Source(type_.__name__, domain), _type_=type_)
+        return Variable(name, type_, _domain_=domain)
+    else:
+        return Source(name, domain)
 
 
 def And(*conditions):

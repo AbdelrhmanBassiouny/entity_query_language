@@ -56,6 +56,7 @@ class RevoluteConnection(Connection):
     ...
 
 
+@symbol
 @dataclass
 class World:
     id: int = 0

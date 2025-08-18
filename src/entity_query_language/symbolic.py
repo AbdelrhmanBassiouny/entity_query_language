@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import contextvars
 import operator
+import typing
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Callable
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
-from typing_extensions import dataclass_transform, List, Tuple
+from typing_extensions import dataclass_transform, List, Tuple, Callable
 
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
@@ -41,6 +41,28 @@ class SymbolicRule:
         if self.query is not None:
             self.query.__exit__(exc_type, exc_val, exc_tb)
         _set_symbolic_mode(False)
+
+
+@dataclass_transform()
+def symbol(cls):
+    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
+    orig_getattr_ = cls.__getattr__ if '__getattr__' in cls.__dict__ else None
+
+    def symbolic_new(symbolic_cls, *args, **kwargs):
+        if in_symbolic_mode():
+            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
+        return orig_new(symbolic_cls)
+
+    def symbolic_getattr(self, name):
+        if in_symbolic_mode():
+            return Attribute(self, name)
+        if orig_getattr_ is not None:
+            return orig_getattr_(self, name)
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
+    cls.__new__ = symbolic_new
+    # cls.__getattr__ = symbolic_getattr
+    return cls
 
 
 T = TypeVar("T")
@@ -81,6 +103,13 @@ class HashedIterable(Generic[T]):
 
     def get(self, key: int, default: Any) -> HashedValue[T]:
         return self.values.get(key, default)
+
+    def add(self, value: Any):
+        if not isinstance(value, HashedValue):
+            value = HashedValue(value)
+        if value.id_ not in self.values:
+            self.values[value.id_] = value
+        return self
 
     def __iter__(self):
         """
@@ -151,6 +180,9 @@ class HashedIterable(Generic[T]):
         values_are_equal = all(my_v == other_v for my_v, other_v in zip(self.values.values(), other.values.values()))
         return values_are_equal
 
+    def __bool__(self):
+        return bool(self.values) or bool(self.iterable)
+
 
 id_generator = IDGenerator()
 
@@ -161,14 +193,15 @@ class SymbolicExpression(Generic[T], ABC):
     _id_: int = field(init=False, repr=False, default=None)
     _node_: Node = field(init=False, default=None, repr=False)
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
-    _conclusion_: Optional[SymbolicExpression] = field(init=False, default=None)
+    _conclusion_: Optional[Conclusion] = field(init=False, default=None)
     _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
+    _conclusions_: ClassVar[typing.Set[Conclusion]] = set()
 
     def __post_init__(self):
         self._id_ = id_generator(self)
         node_name = self._name_ + f"_{self._id_}"
         self._create_node_(node_name)
-        if self._child_ is not None:
+        if hasattr(self, "_child_") and self._child_ is not None:
             self._update_child_()
         if self._id_ not in self._id_expression_map_:
             self._id_expression_map_[self._id_] = self
@@ -188,22 +221,6 @@ class SymbolicExpression(Generic[T], ABC):
     def _create_node_(self, name: str):
         self._node_ = Node(name)
         self._node_._expression = self
-
-    def _evaluate_(self, selected_vars: Iterable[HasDomain],
-                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        if isinstance(selected_vars, HasDomain):
-            selected_vars = [selected_vars]
-        seen_values = set()
-        for v in self._evaluate__(sources):
-            if self._conclusion_ is not None:
-                v = self._conclusion_._evaluate__(v)
-            for var in selected_vars:
-                if var._id_ not in v:
-                    v[var._id_] = next(var._evaluate__(v))
-            v = HashedIterable(values={var._id_: v[var._id_] for var in selected_vars})
-            if v not in seen_values:
-                seen_values.add(v)
-                yield v
 
     @abstractmethod
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Union[HashedIterable, HashedValue]]:
@@ -248,6 +265,14 @@ class SymbolicExpression(Generic[T], ABC):
         return self._node_.root._expression
 
     @property
+    @lru_cache(maxsize=None)
+    def _sources_(self) -> List[HasDomain]:
+        sources = []
+        for leaf in self._unique_variables_:
+            sources.extend(leaf.value._domain_sources_)
+        return sources
+
+    @property
     @abstractmethod
     def _name_(self) -> str:
         pass
@@ -274,8 +299,31 @@ class SymbolicExpression(Generic[T], ABC):
             return cls._symbolic_expression_stack_[-1]
         return None
 
+    @property
+    @lru_cache(maxsize=None)
+    def _parent_variable_(self) -> Variable:
+        return self._all_variable_instances_[0]
+
+    @property
+    @lru_cache(maxsize=None)
+    def _unique_variables_(self) -> HashedIterable[Variable]:
+        unique_variables = HashedIterable()
+        for var in self._all_variable_instances_:
+            unique_variables.add(var)
+        return unique_variables
+
+    @property
+    @abstractmethod
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        """
+        Get the leaf instances of the symbolic expression.
+        This is useful for accessing the leaves of the symbolic expression tree.
+        """
+        ...
+
     def __xor__(self, other) -> SymbolicExpression:
-        return ElseIf(self, other)
+        return XOR(self, other)
 
     def __and__(self, other):
         return AND(self, other)
@@ -301,8 +349,63 @@ class SymbolicExpression(Generic[T], ABC):
 
 
 @dataclass(eq=False)
+class Source(SymbolicExpression[T]):
+    _name__: str
+    _value_: T
+    _child_: Optional[SymbolicExpression[T]] = field(init=False)
+
+    def __post_init__(self):
+        if type(self) is Source:
+            self._child_ = None
+        super().__post_init__()
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return []
+
+    @property
+    def _name_(self) -> str:
+        return self._name__
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
+        return self._value_
+
+    def __getattr__(self, name):
+        return SourceAttribute(name, getattr(self._value_, name), _child_=self)
+
+    def __call__(self, *args, **kwargs):
+        return SourceCall(self._name_, self._value_(*args, **kwargs), self, args, kwargs)
+
+
+@dataclass(eq=False)
+class SourceAttribute(Source):
+    _child_: Source = field(kw_only=True)
+
+    @property
+    def _name_(self) -> str:
+        return f"{self._child_._name_}.{self._name__}"
+
+
+@dataclass(eq=False)
+class SourceCall(Source):
+    _child_: Source
+    _args_: Tuple[Any, ...] = field(default_factory=tuple)
+    _kwargs_: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def _name_(self) -> str:
+        return (f"{self._child_._name_}({', '.join(map(str, self._args_))},"
+                f" {', '.join(f'{k}={v}' for k, v in self._kwargs_.items())})")
+
+
+@dataclass(eq=False)
 class ResultQuantifier(SymbolicExpression[T], ABC):
     _child_: Entity[T]
+
+    @property
+    def _name_(self) -> str:
+        return f"{self.__class__.__name__}()"
 
     def evaluate(self) -> Iterable[T]:
         return self._evaluate__()
@@ -330,6 +433,11 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         new_branch._node_.weight = RDREdge.Next
         new_conditions_root._node_.parent = self._child_._node_
         return self
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return self._child_._all_variable_instances_
 
 
 def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
@@ -359,6 +467,11 @@ class Conclusion(SymbolicExpression[T], ABC):
         self._parent_ = current_parent
         current_parent._conclusion_ = self
 
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return []
+
 
 @dataclass(eq=False)
 class Set(Conclusion[T]):
@@ -387,7 +500,7 @@ class Add(Conclusion[T]):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         v = next(iter(self.value._evaluate__(sources)))
         self.var._domain_[v.id_] = v
-        sources[self.var._leaf_id_] = v
+        sources[self.var._parent_variable_._id_] = v
         return sources
 
     @property
@@ -397,10 +510,6 @@ class Add(Conclusion[T]):
 
 @dataclass(eq=False)
 class The(ResultQuantifier[T]):
-
-    @property
-    def _name_(self) -> str:
-        return f"The({self._child_._name_})"
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
         sol_gen = self._child_._evaluate__(sources)
@@ -416,32 +525,62 @@ class The(ResultQuantifier[T]):
 @dataclass(eq=False)
 class An(ResultQuantifier[T]):
 
-    @property
-    def _name_(self) -> str:
-        return f"An({self._child_._name_})"
-
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
         yield from self._child_._evaluate__(sources)
 
 
 @dataclass(eq=False)
-class SetOf(SymbolicExpression[T]):
-    _child_: SymbolicExpression
+class QueryObjectDescriptor(SymbolicExpression[T], ABC):
+    """
+    Describes the queried object(s), could be a query over a single variable or a set of variables,
+    also describes the condition(s)/properties of the queried object(s).
+    """
+    _child_: SymbolicExpression[T]
+
+    def _evaluate_(self, selected_vars: Iterable[HasDomain],
+                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        if isinstance(selected_vars, HasDomain):
+            selected_vars = [selected_vars]
+        seen_values = set()
+        for v in self._child_._evaluate__(sources):
+            if self._child_._conclusion_ is not None:
+                v = self._child_._conclusion_._evaluate__(v)
+            for var in selected_vars:
+                if var._id_ not in v:
+                    v[var._id_] = next(var._evaluate__(v))
+            v = HashedIterable(values={var._id_: v[var._id_] for var in selected_vars})
+            if v not in seen_values:
+                seen_values.add(v)
+                yield v
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return self._child_._all_variable_instances_
+
+
+@dataclass(eq=False)
+class SetOf(QueryObjectDescriptor[T]):
+    """
+    A query over a set of variables.
+    """
     selected_variables_: Iterable[HasDomain]
 
     @property
     def _name_(self) -> str:
-        return f"SetOf({self._child_._name_})"
+        return f"SetOf({', '.join(var._name_ for var in self.selected_variables_)})"
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Dict[HasDomain, Any]]:
-        sol_gen = self._child_._evaluate_(self.selected_variables_, sources)
+        sol_gen = self._evaluate_(self.selected_variables_, sources)
         for sol in sol_gen:
             yield {var: sol[var._id_].value for var in self.selected_variables_ if var._id_ in sol}
 
 
 @dataclass(eq=False)
-class Entity(SymbolicExpression[T]):
-    _child_: SymbolicExpression
+class Entity(QueryObjectDescriptor[T]):
+    """
+    A query over a single variable.
+    """
     selected_variable_: T
 
     @property
@@ -449,7 +588,7 @@ class Entity(SymbolicExpression[T]):
         return f"Entity({self.selected_variable_._name_})"
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        sol_gen = self._child_._evaluate_(self.selected_variable_)
+        sol_gen = self._evaluate_(self.selected_variable_)
         for sol in sol_gen:
             yield sol[self.selected_variable_._id_].value
 
@@ -457,11 +596,21 @@ class Entity(SymbolicExpression[T]):
 @dataclass(eq=False)
 class HasDomain(SymbolicExpression, ABC):
     _domain_: HashedIterable[Any] = field(default=None, init=False)
-    _child_: HasDomain = field(init=False)
+    _domain_sources_: Optional[List[Union[HasDomain, Source]]] = field(default_factory=list, init=False)
+    _child_: Optional[HasDomain] = field(init=False)
 
     def __post_init__(self):
         if self._domain_ is not None:
-            self._domain_ = HashedIterable(self._domain_)
+            if isinstance(self._domain_, (HasDomain, Source)):
+                self._domain_sources_.append(self._domain_)
+            if isinstance(self._domain_, Source):
+                self._domain_ = HashedIterable(self._domain_._evaluate__().value)
+            elif isinstance(self._domain_, HasDomain):
+                self._domain_ = HashedIterable(self._domain_._evaluate__())
+            elif is_iterable(self._domain_):
+                self._domain_ = HashedIterable(self._domain_)
+            else:
+                self._domain_ = HashedIterable([HashedValue(self._domain_)])
         super().__post_init__()
 
     def __iter__(self):
@@ -494,47 +643,79 @@ class HasDomain(SymbolicExpression, ABC):
     def __ge__(self, other):
         return Comparator(self, other, operator.ge)
 
-    @property
-    @lru_cache(maxsize=None)
-    def _leaf_id_(self):
-        return self._leaf_._id_
-
-    @property
-    @lru_cache(maxsize=None)
-    def _leaf_(self) -> HasDomain:
-        return list(self._leaves_)[0].value
-
-    @property
-    @lru_cache(maxsize=None)
-    def _leaves_(self) -> HashedIterable[HasDomain]:
-        if self._child_ is not None and hasattr(self._child_, '_leaves_'):
-            return self._child_._leaves_
-        else:
-            value = HashedValue(value=self)
-            return HashedIterable(values={value.id_: value})
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_leaf_instances_(self) -> List[HasDomain]:
-        """
-        Get the leaf instances of the symbolic expression.
-        This is useful for accessing the leaves of the symbolic expression tree.
-        """
-        child_leaves = []
-        if self._child_ is not None and hasattr(self._child_, '_all_leaf_instances_'):
-            child_leaves = self._child_._all_leaf_instances_
-        return [self] + child_leaves
-
     def __hash__(self):
         return hash(id(self))
 
 
 @dataclass(eq=False)
+class DomainFilter(HasDomain, ABC):
+    _child_: Union[HasDomain, Source]
+    _invert_: bool = field(init=False, default=False)
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
+            -> Iterable[Union[HashedIterable, HashedValue]]:
+        child_val = self._child_._evaluate__(sources)
+        if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
+            yield from map(lambda v: HashedIterable(values={self._parent_variable_._id_: v}),
+                           filter(self._filter_func_, child_val))
+        else:
+            yield from filter(self._filter_func_, child_val)
+
+    def __iter__(self):
+        yield from filter(self._filter_func_, self._child_._evaluate__())
+
+    def _filter_func_(self, v: Any) -> bool:
+        """
+        The filter function to be used to filter the domain, and handle inversion.
+        """
+        if self._invert_:
+            return not self._filter_func__(v)
+        return self._filter_func__(v)
+
+    @abstractmethod
+    def _filter_func__(self, v: Any) -> bool:
+        """
+        The filter function to be used to filter the domain.
+        """
+        ...
+
+
+@dataclass(eq=False)
+class HasType(DomainFilter):
+    _type_: Tuple[Type,...]
+
+    @property
+    def _name_(self):
+        return f"HasType({self._type_.__name__})"
+
+    def _filter_func__(self, v: Any) -> bool:
+        if isinstance(v, HashedValue):
+            v = v.value
+        return isinstance(v, self._type_)
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return []
+
+
+@dataclass(eq=False)
 class Variable(HasDomain):
-    _cls_: Type
+    _name__: str
+    _type_: Type
     _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
-    _domain_: HashedIterable[Any] = field(default=None, kw_only=True)
-    _child_: Optional[SymbolicExpression] = field(default=None, kw_only=True)
+    _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
+
+    def __post_init__(self):
+        if type(self) is Variable:
+            self._child_ = None
+        super().__post_init__()
+        if self._cls_kwargs_:
+            for k, v in self._cls_kwargs_.items():
+                if isinstance(v, HasDomain):
+                    self._domain_sources_.append(v)
+                else:
+                    self._domain_sources_.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
 
     def _evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedValue]:
         """
@@ -543,42 +724,47 @@ class Variable(HasDomain):
         sources = sources or HashedIterable()
         if self._id_ in sources:
             yield from (sources[self._id_],)
+        elif not self._domain_:
+            def domain_gen():
+                cls_kwargs = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in
+                              self._cls_kwargs_.items()}
+                symbolic_vars = []
+                for k, v in self._cls_kwargs_.items():
+                    if isinstance(v, HasDomain):
+                        symbolic_vars.append(v)
+                while True:
+                    try:
+                        instance = self._type_(**{k: next(v).value if k in symbolic_vars else v.value
+                                                  for k, v in cls_kwargs.items()})
+                        yield HashedValue(instance)
+                    except StopIteration:
+                        break
+            yield from domain_gen()
         else:
-            if self._domain_ is None and self._cls_ is not None:
-                def domain_gen():
-                    cls_kwargs = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in
-                                  self._cls_kwargs_.items()}
-                    symbolic_vars = []
-                    for k, v in self._cls_kwargs_.items():
-                        if isinstance(v, HasDomain):
-                            symbolic_vars.append(v)
-                    while True:
-                        try:
-                            instance = self._cls_(**{k: next(v).value if k in symbolic_vars else v.value
-                                                     for k, v in cls_kwargs.items()})
-                            yield HashedValue(instance)
-                        except StopIteration:
-                            break
-
-                yield from domain_gen()
-            else:
-                yield from self
+            yield from self
 
     @property
     def _name_(self):
-        return self._cls_.__name__
+        return self._name__
 
     @classmethod
     def _from_domain_(cls, iterable, clazz: Optional[Type] = None,
-                      child: Optional[SymbolicExpression] = None) -> Variable:
+                      name: Optional[str] = None) -> Variable:
         if not is_iterable(iterable):
             iterable = make_list(iterable)
         if not clazz:
             clazz = type(next((iter(iterable)), None))
-        return Variable(clazz, _domain_=iterable, _child_=child)
+        if name is None:
+            name = clazz.__name__
+        return Variable(name, clazz, _domain_=iterable)
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return [self]
 
     def __repr__(self):
-        return (f"Symbolic({self._cls_.__name__}("
+        return (f"Symbolic({self._type_.__name__}("
                 f"{', '.join(f'{k}={v!r}' for k, v in self._cls_kwargs_.items())}))")
 
 
@@ -590,6 +776,19 @@ class DomainMapping(HasDomain, ABC):
     _child_: HasDomain
     _invert_: bool = field(init=False, default=False)
 
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return [next(iter(self._unique_variables_)).value]
+
+    @property
+    @lru_cache(maxsize=None)
+    def _unique_variables_(self) -> HashedIterable[Variable]:
+        child = self._child_
+        while not isinstance(child, Variable):
+            child = child._child_
+        return HashedIterable(values={child._id_: HashedValue(child)})
+
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
@@ -597,7 +796,7 @@ class DomainMapping(HasDomain, ABC):
             for child_v in child_val:
                 v = self._apply_mapping_(child_v)
                 if (not self._invert_ and v.value) or (self._invert_ and not v.value):
-                    yield HashedIterable(values={self._leaf_id_: self._leaf_._domain_[v.id_]})
+                    yield HashedIterable(values={self._parent_variable_._id_: self._parent_variable_._domain_[v.id_]})
         else:
             yield from (self._apply_mapping_(v) for v in child_val)
 
@@ -661,8 +860,8 @@ class BinaryOperator(ConstrainingOperator, ABC):
     """
     A base class for binary operators that can be used to combine symbolic expressions.
     """
-    left: SymbolicExpression
-    right: SymbolicExpression
+    left: HasDomain
+    right: HasDomain
     _child_: SymbolicExpression = field(init=False, default=None)
 
     def __post_init__(self):
@@ -676,17 +875,12 @@ class BinaryOperator(ConstrainingOperator, ABC):
 
     @property
     @lru_cache(maxsize=None)
-    def _leaves_(self) -> HashedIterable[HasDomain]:
-        return self.left._leaves_ | self.right._leaves_
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_leaf_instances_(self) -> List[HasDomain]:
+    def _all_variable_instances_(self) -> List[Variable]:
         """
         Get the leaf instances of the symbolic expression.
         This is useful for accessing the leaves of the symbolic expression tree.
         """
-        return self.left._all_leaf_instances_ + self.right._all_leaf_instances_
+        return self.left._all_variable_instances_ + self.right._all_variable_instances_
 
 
 @dataclass(eq=False)
@@ -725,8 +919,9 @@ class Comparator(BinaryOperator):
             case operator.contains:
                 def not_contains(a, b):
                     return not operator.contains(a, b)
-
                 self.operation = not_contains if self._invert_ else self.operation
+            case _:
+                raise ValueError(f"Unsupported operation: {self.operation.__name__}")
         self._node_.name = self._node_.name.replace(prev_operation.__name__, self.operation.__name__)
 
     @property
@@ -746,7 +941,7 @@ class Comparator(BinaryOperator):
         source and the source has been exhausted.
         """
         sources = sources or HashedIterable()
-        if self.right._leaf_id_ not in sources:
+        if self.right._parent_variable_._id_ not in sources:
             left_values = self.left._evaluate__(sources)
             for left_value in left_values:
                 right_values = self.right._evaluate__(sources)
@@ -767,9 +962,9 @@ class Comparator(BinaryOperator):
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
         satisfied = self.operation(left_value.value, right_value.value)
         if satisfied:
-            left_leaf_value = self.left._leaf_._domain_[left_value.id_]
-            right_leaf_value = self.right._leaf_._domain_[right_value.id_]
-            return HashedIterable(values={self.left._leaf_id_: left_leaf_value, self.right._leaf_id_: right_leaf_value})
+            left_leaf_value = self.left._parent_variable_._domain_[left_value.id_]
+            right_leaf_value = self.right._parent_variable_._domain_[right_value.id_]
+            return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value, self.right._parent_variable_._id_: right_leaf_value})
         else:
             return None
 
@@ -795,7 +990,7 @@ class AND(LogicalOperator):
 
         # init an empty source if none is provided
         sources = sources or HashedIterable()
-        right_values_leaf_ids = [leaf.id_ for leaf in self.right._leaves_]
+        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
         seen_left_values = set()
 
         # constrain left values by available sources
@@ -846,9 +1041,41 @@ class OR(LogicalOperator):
 
 
 @dataclass(eq=False)
-class ElseIf(LogicalOperator):
+class ExceptIf(LogicalOperator):
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        """
+        Evaluate the ExceptIf condition and yield the results.
+        """
+        # init an empty source if none is provided
+        sources = sources or HashedIterable()
+        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
+        seen_left_values = set()
+
+        # constrain left values by available sources
+        left_values = self.left._evaluate__(sources)
+        for left_value in left_values:
+
+            values_for_right_leaves = {(k, left_value[k]) for k in right_values_leaf_ids if k in left_value}
+            if seen_left_values and values_for_right_leaves.issubset(seen_left_values):
+                continue
+            else:
+                seen_left_values.update(values_for_right_leaves)
+
+            right_yielded = False
+            for right_value in self.right._evaluate__(left_value):
+                right_yielded = True
+                self._conclusions_.add(self.right._conclusion_)
+                yield left_value.union(right_value)
+            if not right_yielded:
+                self._conclusions_.add(self.left._conclusion_)
+                yield left_value
+
+
+@dataclass(eq=False)
+class XOR(LogicalOperator):
     """
-    A symbolic ElseIf operation that can be used to combine multiple symbolic expressions.
+    A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
@@ -874,19 +1101,6 @@ class ElseIf(LogicalOperator):
                     yield sources.union(operand_value)
             if entered:
                 break
-
-
-@dataclass_transform()
-def symbol(cls):
-    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
-
-    def symbolic_new(symbolic_cls, *args, **kwargs):
-        if in_symbolic_mode():
-            return Variable(symbolic_cls, _cls_kwargs_=kwargs)
-        return orig_new(symbolic_cls)
-
-    cls.__new__ = symbolic_new
-    return cls
 
 
 def Not(operand: Any) -> SymbolicExpression:

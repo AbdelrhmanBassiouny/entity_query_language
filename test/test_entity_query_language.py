@@ -2,6 +2,7 @@ from typing import Iterable
 
 import pytest
 
+from datasets import World
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement
@@ -10,14 +11,14 @@ from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnect
     View
 
 
-def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
+def  test_generate_with_using_attribute_and_callables(handles_and_containers_world):
     """
     Test the generation of handles in the HandlesAndContainersWorld.
     """
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Handle"))).evaluate()
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Handle"))).evaluate()
 
     handles = list(generate_handles())
     assert len(handles) == 3, "Should generate at least one handle."
@@ -31,7 +32,8 @@ def test_generate_with_using_contains(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies), contains(body.name, "Handle"))).evaluate()
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
+                             contains(body.name, "Handle"))).evaluate()
 
     handles = list(generate_handles())
     assert len(handles) == 3, "Should generate at least one handle."
@@ -45,7 +47,7 @@ def test_generate_with_using_in(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies), in_("Handle", body.name))).evaluate()
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies), in_("Handle", body.name))).evaluate()
 
     handles = list(generate_handles())
     assert len(handles) == 3, "Should generate at least one handle."
@@ -59,7 +61,7 @@ def test_generate_with_using_and(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              contains(body.name, "Handle") & contains(body.name, '1'))).evaluate()
 
     handles = list(generate_handles())
@@ -74,7 +76,7 @@ def test_generate_with_using_or(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              contains(body.name, "Handle1") | contains(body.name, 'Handle2'))).evaluate()
 
     handles = list(generate_handles())
@@ -89,21 +91,20 @@ def test_generate_with_using_multi_or(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles_and_container1():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              contains(body.name, "Handle1")
                              | contains(body.name, 'Handle2')
                              | contains(body.name, 'Container1'))).evaluate()
 
     handles_and_container1 = list(generate_handles_and_container1())
     assert len(handles_and_container1) == 3, "Should generate at least one handle."
-    # assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
 
 
 def test_generate_with_or_and(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles_and_container1():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              Or(And(contains(body.name, "Handle"),
                                     contains(body.name, '1'))
                                 , And(contains(body.name, 'Container'),
@@ -120,7 +121,7 @@ def test_generate_with_and_or(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles_and_container1():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              Or(contains(body.name, "Handle"), contains(body.name, '1'))
                              , Or(contains(body.name, 'Container'), contains(body.name, '1'))
                              )
@@ -134,7 +135,7 @@ def test_generate_with_multi_and(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_container1():
-        yield from an(entity(body := let(type_=Body, domain=world.bodies),
+        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
                              contains(body.name, "n"), contains(body.name, '1')
                              , contains(body.name, 'C'))).evaluate()
 
@@ -147,10 +148,10 @@ def test_generate_with_multi_and(handles_and_containers_world):
 def test_generate_with_more_than_one_source(handles_and_containers_world):
     world = handles_and_containers_world
 
-    container = let(type_=Container, domain=world.bodies)
-    handle = let(type_=Handle, domain=world.bodies)
-    fixed_connection = let(type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
     drawer_components = (container, handle, fixed_connection, prismatic_connection)
 
     solutions = an(set_of(drawer_components,
@@ -168,19 +169,39 @@ def test_generate_with_more_than_one_source(handles_and_containers_world):
         assert sol[prismatic_connection].child == sol[fixed_connection].parent
 
 
+def test_sources(handles_and_containers_world):
+    world = let("world", type_=World, domain=handles_and_containers_world)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    drawer_components = (container, handle, fixed_connection, prismatic_connection)
+
+    query = an(set_of(drawer_components,
+                          container == fixed_connection.parent,
+                          handle == fixed_connection.child,
+                          container == prismatic_connection.child
+                          ), show_tree=True
+                   )
+    sources = query._sources_
+    assert len(sources) == 4, "Should have four sources."
+
 def test_the(handles_and_containers_world):
     world = handles_and_containers_world
 
     with pytest.raises(MultipleSolutionFound):
-        handle = the(entity(body := let(type_=Handle, domain=world.bodies), body.name.startswith("Handle"))).evaluate()
+        handle = the(entity(body := let("body", type_=Handle, domain=world.bodies),
+                            body.name.startswith("Handle"))).evaluate()
 
-    handle = the(entity(body := let(type_=Handle, domain=world.bodies), body.name.startswith("Handle1"))).evaluate()
+    handle = the(entity(body := let("body", type_=Handle, domain=world.bodies),
+                        body.name.startswith("Handle1"))).evaluate()
 
 
 def test_not_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
     not_handle = an(
-        entity(body := let(type_=Body, domain=world.bodies), Not(body.name.startswith("Handle")))).evaluate()
+        entity(body := let("body", type_=Body, domain=world.bodies),
+               Not(body.name.startswith("Handle")))).evaluate()
     all_not_handles = list(not_handle)
     assert len(all_not_handles) == 3, "Should generate 3 not handles"
     assert all(isinstance(b, Container) for b in all_not_handles)
@@ -188,7 +209,8 @@ def test_not_domain_mapping(handles_and_containers_world):
 
 def test_not_comparator(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle = an(entity(body := let(type_=Body, domain=world.bodies), Not(contains(body.name, "Handle")))).evaluate()
+    not_handle = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                           Not(contains(body.name, "Handle")))).evaluate()
     all_not_handles = list(not_handle)
     assert len(all_not_handles) == 3, "Should generate 3 not handles"
     assert all(isinstance(b, Container) for b in all_not_handles)
@@ -196,7 +218,7 @@ def test_not_comparator(handles_and_containers_world):
 
 def test_not_and(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1 = an(entity(body := let(type_=Body, domain=world.bodies),
+    not_handle1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
                             Not(contains(body.name, "Handle") & contains(body.name, '1'))
                             )
                      ).evaluate()
@@ -208,7 +230,7 @@ def test_not_and(handles_and_containers_world):
 
 def test_not_or(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1_or2 = an(entity(body := let(type_=Body, domain=world.bodies),
+    not_handle1_or2 = an(entity(body := let("body", type_=Body, domain=world.bodies),
                                 Not(contains(body.name, "Handle1") | contains(body.name, 'Handle2'))
                                 )
                          ).evaluate()
@@ -221,7 +243,7 @@ def test_not_or(handles_and_containers_world):
 
 def test_not_and_or(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
+    not_handle1_and_not_container1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
                                                Not(Or(And(contains(body.name, "Handle"),
                                                           contains(body.name, '1'))
                                                       , And(contains(body.name, 'Container'),
@@ -239,7 +261,7 @@ def test_not_and_or(handles_and_containers_world):
 
 def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
+    not_handle1_and_not_container1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
                                                Not(And(Or(body.name.startswith("Handle"),
                                                           body.name.endswith('1'))
                                                        , Or(body.name.startswith('Container'),
@@ -258,10 +280,10 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
 def test_generate_drawers(handles_and_containers_world):
     world = handles_and_containers_world
 
-    container = let(type_=Container, domain=world.bodies)
-    handle = let(type_=Handle, domain=world.bodies)
-    fixed_connection = let(type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
     with SymbolicRule():
         solutions = an(entity(Drawer(handle=handle, container=container),
                               And(container == fixed_connection.parent,
@@ -280,12 +302,12 @@ def test_generate_drawers(handles_and_containers_world):
 def test_add_conclusion(handles_and_containers_world):
     world = handles_and_containers_world
 
-    container = let(type_=Container, domain=world.bodies)
-    handle = let(type_=Handle, domain=world.bodies)
-    fixed_connection = let(type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
 
-    query = an(entity(drawers := let(type_=Drawer),
+    query = an(entity(drawers := let("drawers", type_=Drawer),
                           And(container == fixed_connection.parent,
                               handle == fixed_connection.child,
                               container == prismatic_connection.child))
