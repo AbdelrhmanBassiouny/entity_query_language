@@ -1121,35 +1121,45 @@ class XOR(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         seen_values = set()
+        seen_right_values = set()
         seen_negative_values = set()
-        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        right_sources = set()
+        shared_ids = list(map(lambda v: v.value._id_,
+                         self.left._unique_variables_.intersection(self.right._unique_variables_)))
+
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
-
         for left_value in left_values:
             if self.left._is_false_:
-                values_for_right_leaves = tuple([(k, left_value[k]) for k in right_values_leaf_ids if k in left_value])
+                values_for_right_leaves = tuple([(k, left_value[k]) for k in shared_ids if k in left_value])
                 if values_for_right_leaves not in seen_negative_values:
                     seen_negative_values.add(values_for_right_leaves)
-                    right_sources.add(left_value)
-                continue
-            # Check operand value, if result is False, continue to next operand value.
-            if left_value not in seen_values:
-                self._conclusion_.update(self.left._conclusion_)
-                seen_values.add(left_value)
-                yield sources.union(left_value)
-                self._conclusion_.clear()
+                    right_values = self.right._evaluate__(left_value.union(sources))
+                    for right_value in right_values:
+                        if self.right._is_false_:
+                            self._is_false_ = True
+                            if self._yield_when_false_:
+                                yield left_value.union(right_value)
+                        else:
+                            self._is_false_ = False
+                            yield from self.update_conclusion_and_yield_operand_value(self.right, right_value,
+                                                                                      sources.union(left_value),
+                                                                                      seen_right_values)
+            else:
+                yield from self.update_conclusion_and_yield_operand_value(self.left, left_value, sources, seen_values)
 
-        seen_values = set()
-        for right_source in right_sources:
-            right_values = self.right._evaluate__(right_source)
-            for right_value in right_values:
-                if right_value not in seen_values:
-                    self._conclusion_.update(self.right._conclusion_)
-                    seen_values.add(right_value)
-                    yield right_source.union(right_value)
-                    self._conclusion_.clear()
+
+    def update_conclusion_and_yield_operand_value(self, operand: SymbolicExpression, operand_value: HashedIterable,
+                                                  sources: Optional[HashedIterable],
+                                                  seen_values: typing.Set)\
+            -> Iterable[HashedIterable]:
+        """
+        Evaluate the operand of the XOR operation and yield the results.
+        """
+        if operand_value not in seen_values:
+            self._conclusion_.update(operand._conclusion_)
+            seen_values.add(operand_value)
+            yield sources.union(operand_value)
+            self._conclusion_.clear()
 
 
 def Not(operand: Any) -> SymbolicExpression:
