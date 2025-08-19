@@ -1074,6 +1074,8 @@ class ExceptIf(LogicalOperator):
             else:
                 seen_left_values.update(values_for_right_leaves)
 
+            left_value = left_value.union(sources)
+
             right_yielded = False
             for right_value in self.right._evaluate__(left_value):
                 right_yielded = True
@@ -1129,11 +1131,12 @@ class XOR(LogicalOperator):
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
+            left_value = left_value.union(sources)
             if self.left._is_false_:
                 values_for_right_leaves = tuple([(k, left_value[k]) for k in shared_ids if k in left_value])
                 if values_for_right_leaves not in seen_negative_values:
                     seen_negative_values.add(values_for_right_leaves)
-                    right_values = self.right._evaluate__(left_value.union(sources))
+                    right_values = self.right._evaluate__(left_value)
                     for right_value in right_values:
                         if self.right._is_false_:
                             self._is_false_ = True
@@ -1142,7 +1145,7 @@ class XOR(LogicalOperator):
                         else:
                             self._is_false_ = False
                             yield from self.update_conclusion_and_yield_operand_value(self.right, right_value,
-                                                                                      sources.union(left_value),
+                                                                                      left_value,
                                                                                       seen_right_values)
             else:
                 yield from self.update_conclusion_and_yield_operand_value(self.left, left_value, sources, seen_values)
