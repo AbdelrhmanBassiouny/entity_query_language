@@ -188,7 +188,8 @@ class SymbolicExpression(Generic[T], ABC):
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
     _conclusion_: typing.Set[Conclusion] = field(init=False, default_factory=set)
     _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
-    _conclusions_: ClassVar[typing.Set[Conclusion]] = set()
+    _yield_when_false_: bool = field(init=False, repr=False, default=False)
+    _is_false_: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self):
         self._id_ = id_generator(self)
@@ -931,7 +932,11 @@ class Comparator(BinaryOperator):
                 for right_value in right_values:
                     res = self.check(left_value, right_value)
                     if res:
+                        self._is_false_ = False
                         yield res
+                    elif self._yield_when_false_:
+                        self._is_false_ = True
+                        yield self.get_result_domain(left_value, right_value)
 
         else:
             right_values = self.right._evaluate__(sources)
@@ -945,11 +950,15 @@ class Comparator(BinaryOperator):
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
         satisfied = self.operation(left_value.value, right_value.value)
         if satisfied:
-            left_leaf_value = self.left._parent_variable_._domain_[left_value.id_]
-            right_leaf_value = self.right._parent_variable_._domain_[right_value.id_]
-            return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value, self.right._parent_variable_._id_: right_leaf_value})
+            return self.get_result_domain(left_value, right_value)
         else:
             return None
+
+    def get_result_domain(self, left_value: HashedValue, right_value: HashedValue) -> HashedIterable:
+        left_leaf_value = self.left._parent_variable_._domain_[left_value.id_]
+        right_leaf_value = self.right._parent_variable_._domain_[right_value.id_]
+        return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value,
+                                      self.right._parent_variable_._id_: right_leaf_value})
 
 
 @dataclass(eq=False)
@@ -979,12 +988,15 @@ class AND(LogicalOperator):
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
-
-            values_for_right_leaves = {(k, left_value[k]) for k in right_values_leaf_ids if k in left_value}
-            if seen_left_values and values_for_right_leaves.issubset(seen_left_values):
+            if self._yield_when_false_ and self.left._is_false_:
+                self._is_false_ = True
+                yield left_value
+                continue
+            values_for_right_leaves = tuple([(k, left_value[k]) for k in right_values_leaf_ids if k in left_value])
+            if values_for_right_leaves in seen_left_values:
                 continue
             else:
-                seen_left_values.update(values_for_right_leaves)
+                seen_left_values.add(values_for_right_leaves)
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -992,6 +1004,11 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
+                if self._yield_when_false_:
+                    if self.right._is_false_:
+                        self._is_false_ = True
+                    else:
+                        self._is_false_ = False
                 yield left_value.union(right_value)
 
 
@@ -1090,6 +1107,12 @@ class XOR(LogicalOperator):
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
 
+    def __post_init__(self):
+        super().__post_init__()
+        self.left._yield_when_false_ = True
+        for child in self.left._descendants_:
+            child._yield_when_false_ = True
+
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
         Constrain the symbolic expression based on the indices of the operands.
@@ -1098,23 +1121,35 @@ class XOR(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         seen_values = set()
-
+        seen_negative_values = set()
+        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
+        right_sources = set()
         # constrain left values by available sources
-        for operand in [self.left, self.right]:
+        left_values = self.left._evaluate__(sources)
 
-            operand_values = operand._evaluate__(sources)
-            entered = False
+        for left_value in left_values:
+            if self.left._is_false_:
+                values_for_right_leaves = tuple([(k, left_value[k]) for k in right_values_leaf_ids if k in left_value])
+                if values_for_right_leaves not in seen_negative_values:
+                    seen_negative_values.add(values_for_right_leaves)
+                    right_sources.add(left_value)
+                continue
+            # Check operand value, if result is False, continue to next operand value.
+            if left_value not in seen_values:
+                self._conclusion_.update(self.left._conclusion_)
+                seen_values.add(left_value)
+                yield sources.union(left_value)
+                self._conclusion_.clear()
 
-            for operand_value in operand_values:
-                entered = True
-                # Check operand value, if result is False, continue to next operand value.
-                if operand_value not in seen_values:
-                    self._conclusion_.update(operand._conclusion_)
-                    seen_values.add(operand_value)
-                    yield sources.union(operand_value)
+        seen_values = set()
+        for right_source in right_sources:
+            right_values = self.right._evaluate__(right_source)
+            for right_value in right_values:
+                if right_value not in seen_values:
+                    self._conclusion_.update(self.right._conclusion_)
+                    seen_values.add(right_value)
+                    yield right_source.union(right_value)
                     self._conclusion_.clear()
-            if entered:
-                break
 
 
 def Not(operand: Any) -> SymbolicExpression:

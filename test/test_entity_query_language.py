@@ -398,3 +398,39 @@ def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
     assert all_solutions[2].handle.name == "Handle1"
     assert all_solutions[2].container.name == "Container1"
 
+
+def test_rule_tree_with_an_alternative(doors_and_drawers_world):
+    world = let("world", type_=World, domain=doors_and_drawers_world)
+    body = let("body", type_=Body, domain=world.bodies)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
+
+    query = an(entity(views := let("views", type_=View),
+                      body == fixed_connection.parent,
+                      handle == fixed_connection.child))
+
+    with SymbolicRule(query):
+        Add(views, Drawer(handle=handle, container=body))
+        with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
+            Add(views, Door(handle=handle, body=body))
+
+    query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 4, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    assert isinstance(all_solutions[0], Drawer)
+    assert all_solutions[0].handle.name == "Handle2"
+    assert all_solutions[0].container.name == "Body2"
+    assert isinstance(all_solutions[1], Drawer)
+    assert all_solutions[1].handle.name == "Handle4"
+    assert all_solutions[1].container.name == "Body4"
+    assert isinstance(all_solutions[2], Drawer)
+    assert all_solutions[2].handle.name == "Handle1"
+    assert all_solutions[2].container.name == "Container1"
+    assert isinstance(all_solutions[3], Door)
+    assert all_solutions[3].handle.name == "Handle3"
+    assert all_solutions[3].body.name == "Body3"
+
