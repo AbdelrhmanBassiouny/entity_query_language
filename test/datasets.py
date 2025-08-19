@@ -107,8 +107,17 @@ class Cabinet(View):
             return False
         return self.container == other.container and self.drawers == other.drawers and self.world == other.world
 
+
 @symbol
 @dataclass(unsafe_hash=True)
 class Door(View):
     handle: Handle
     body: Body
+
+
+@symbol
+@dataclass(unsafe_hash=True)
+class Wardrobe(View):
+    handle: Handle
+    body: Body
+    container: Container

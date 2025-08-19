@@ -4,38 +4,50 @@ from dataclasses import dataclass, field
 from typing_extensions import List, Callable
 
 from .base_config import WorldConf, BodyConf, Connection, FixedConnectionConf, PrismaticConnectionConf, \
-    ContainerConf, RevoluteConnectionConf
+    ContainerConf, RevoluteConnectionConf, HandleConf
 
 from ...factories.world import create_world
-from .handles_and_containers import Handle1, Handle2, Handle3, Container1
+from .handles_and_containers import Handle1, Handle2, Handle3, Container1, Container2
 
 
 @dataclass
-class Body1(ContainerConf):
+class Body1(BodyConf):
     name: str = "Body1"
 
 
 @dataclass
-class Body2(ContainerConf):
+class Body2(BodyConf):
     name: str = "Body2"
     size: int = 2
 
 
 @dataclass
-class Body3(ContainerConf):
+class Body3(BodyConf):
     name: str = "Body3"
 
+
+@dataclass
+class Body4(BodyConf):
+    name: str = "Body4"
+
+
+@dataclass
+class Handle4(HandleConf):
+    name: str = "Handle4"
 
 
 def bodies():
     return [
-        Handle1(),
-        Handle2(),
-        Handle3(),
-        Body1(),
-        Body2(),
-        Body3(),
-        Container1()
+        Handle1(), # 0
+        Handle2(), # 1
+        Handle3(), # 2
+        Handle4(),  # 3
+        Body1(), # 4
+        Body2(), # 5
+        Body3(), # 6
+        Body4(), # 7
+        Container1(), # 8
+        Container2() # 9
     ]
 
 
@@ -45,7 +57,9 @@ class World(WorldConf):
     connections: List[Connection] = field(default_factory=lambda: [
         FixedConnectionConf(parent=Container1(), child=Handle1()),
         FixedConnectionConf(parent=Body2(), child=Handle2()),
-        RevoluteConnectionConf(parent=Body3(), child=Handle3())
+        FixedConnectionConf(parent=Body4(), child=Handle4()),
+        RevoluteConnectionConf(parent=Body3(), child=Handle3()),
+        RevoluteConnectionConf(parent=Container2(), child=Body4())
     ], init=False)
     factory_method: Callable = field(default=create_world, init=False)
 

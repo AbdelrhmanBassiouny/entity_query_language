@@ -186,7 +186,7 @@ class SymbolicExpression(Generic[T], ABC):
     _id_: int = field(init=False, repr=False, default=None)
     _node_: Node = field(init=False, default=None, repr=False)
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
-    _conclusion_: Optional[Conclusion] = field(init=False, default=None)
+    _conclusion_: typing.Set[Conclusion] = field(init=False, default_factory=set)
     _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
     _conclusions_: ClassVar[typing.Set[Conclusion]] = set()
 
@@ -447,11 +447,8 @@ class Conclusion(SymbolicExpression[T], ABC):
         current_parent = SymbolicExpression._current_parent_()
         if current_parent is None:
             current_parent = self._conditions_root_
-        if isinstance(current_parent, ExceptIf):
-            self._parent_ = current_parent.right
-        else:
-            self._parent_ = current_parent
-        self._parent_._conclusion_ = self
+        self._parent_ = current_parent
+        self._parent_._conclusion_.add(self)
 
     @property
     @lru_cache(maxsize=None)
@@ -529,7 +526,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             selected_vars = [selected_vars]
         seen_values = set()
         for v in self._child_._evaluate__(sources):
-            for conclusion in self._child_._conclusions_:
+            for conclusion in self._child_._conclusion_:
                 v = conclusion._evaluate__(v)
             for var in selected_vars:
                 if var._id_ not in v:
@@ -538,7 +535,6 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             if v not in seen_values:
                 seen_values.add(v)
                 yield v
-            self._conclusions_.clear()
 
     @property
     @lru_cache(maxsize=None)
@@ -996,8 +992,6 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
-                if self._conclusion_:
-                    self._conclusions_.add(self._conclusion_)
                 yield left_value.union(right_value)
 
 
@@ -1038,7 +1032,7 @@ def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpre
     new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
     new_branch._node_.weight = RDREdge.Refinement
     new_conditions_root._parent_ = prev_parent
-    return new_conditions_root
+    return new_conditions_root.right
 
 
 @dataclass(eq=False)
@@ -1066,11 +1060,28 @@ class ExceptIf(LogicalOperator):
             right_yielded = False
             for right_value in self.right._evaluate__(left_value):
                 right_yielded = True
-                self._conclusions_.remove(self.left._conclusion_)
-                self._conclusions_.add(self.right._conclusion_)
+                self._conclusion_.update(self.right._conclusion_)
                 yield left_value.union(right_value)
+                self._conclusion_.clear()
             if not right_yielded:
+                self._conclusion_.update(self.left._conclusion_)
                 yield left_value
+                self._conclusion_.clear()
+
+
+def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
+    """
+    Exclude results that match the given conditions.
+    """
+    new_branch = chained_logic(AND, *conditions)
+    current_node = SymbolicExpression._current_parent_()
+    prev_parent = current_node._parent_
+    new_conditions_root = XOR(current_node, new_branch)
+    new_branch._node_.weight = RDREdge.Alternative
+    new_conditions_root._parent_ = prev_parent
+    if isinstance(prev_parent, BinaryOperator):
+        prev_parent.right = new_conditions_root
+    return new_conditions_root.right
 
 
 @dataclass(eq=False)
@@ -1098,8 +1109,10 @@ class XOR(LogicalOperator):
                 entered = True
                 # Check operand value, if result is False, continue to next operand value.
                 if operand_value not in seen_values:
+                    self._conclusion_.update(operand._conclusion_)
                     seen_values.add(operand_value)
                     yield sources.union(operand_value)
+                    self._conclusion_.clear()
             if entered:
                 break
 

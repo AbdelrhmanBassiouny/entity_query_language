@@ -3,10 +3,10 @@ from typing import Iterable
 import pytest
 from graphviz import render
 
-from datasets import World
+from datasets import World, Wardrobe
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import SymbolicRule, Add, refinement
+from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative
 from entity_query_language import And, Or, Not, contains, in_
 from entity_query_language.utils import render_tree
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
@@ -330,7 +330,7 @@ def test_add_conclusion(handles_and_containers_world):
     assert len(all_drawers) == 2, "Should generate components for two possible drawer."
 
 
-def test_rule_tree_builder(doors_and_drawers_world):
+def test_rule_tree_with_a_refinement(doors_and_drawers_world):
     world = let("world", type_=World, domain=doors_and_drawers_world)
     body = let("body", type_=Body, domain=world.bodies)
     container = let("container", type_=Container, domain=world.bodies)
@@ -351,10 +351,50 @@ def test_rule_tree_builder(doors_and_drawers_world):
     # query._render_tree_()
 
     all_solutions = list(query.evaluate())
-    assert len(all_solutions) == 2, "Should generate 1 drawer and 1 door."
+    assert len(all_solutions) == 3, "Should generate 1 drawer and 1 door."
     assert isinstance(all_solutions[0], Door)
     assert all_solutions[0].handle.name == "Handle2"
     assert all_solutions[0].body.name == "Body2"
     assert isinstance(all_solutions[1], Drawer)
-    assert all_solutions[1].handle.name == "Handle1"
-    assert all_solutions[1].container.name == "Container1"
+    assert all_solutions[1].handle.name == "Handle4"
+    assert all_solutions[1].container.name == "Body4"
+    assert isinstance(all_solutions[2], Drawer)
+    assert all_solutions[2].handle.name == "Handle1"
+    assert all_solutions[2].container.name == "Container1"
+
+
+def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
+    world = let("world", type_=World, domain=doors_and_drawers_world)
+    body = let("body", type_=Body, domain=world.bodies)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
+
+    query = an(entity(views := let("views", type_=View),
+                      body == fixed_connection.parent,
+                      handle == fixed_connection.child))
+
+    with SymbolicRule(query):
+        Add(views, Drawer(handle=handle, container=body))
+        with refinement(body.size > 1):
+            Add(views, Door(handle=handle, body=body))
+            with alternative(body == revolute_connection.child, container == revolute_connection.parent):
+                Add(views, Wardrobe(handle=handle, body=body, container=container))
+
+    query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    assert isinstance(all_solutions[0], Door)
+    assert all_solutions[0].handle.name == "Handle2"
+    assert all_solutions[0].body.name == "Body2"
+    assert isinstance(all_solutions[1], Wardrobe)
+    assert all_solutions[1].handle.name == "Handle4"
+    assert all_solutions[1].container.name == "Container2"
+    assert all_solutions[1].body.name == "Body4"
+    assert isinstance(all_solutions[2], Drawer)
+    assert all_solutions[2].handle.name == "Handle1"
+    assert all_solutions[2].container.name == "Container1"
+
