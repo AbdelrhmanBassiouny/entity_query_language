@@ -434,3 +434,40 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     assert all_solutions[3].handle.name == "Handle1"
     assert all_solutions[3].container.name == "Container1"
 
+
+def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
+    world = let("world", type_=World, domain=doors_and_drawers_world)
+    body = let("body", type_=Body, domain=world.bodies)
+    container = let("container", type_=Container, domain=world.bodies)
+    handle = let("handle", type_=Handle, domain=world.bodies)
+    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
+
+    query = an(entity(views := let("views", type_=View),
+                      body == fixed_connection.parent,
+                      handle == fixed_connection.child,
+                      body == prismatic_connection.child
+                      ))
+
+    with SymbolicRule(query):
+        Add(views, Drawer(handle=handle, container=body))
+        with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
+            Add(views, Door(handle=handle, body=body))
+        with alternative(handle.name.endswith('4'), body == revolute_connection.child, container == revolute_connection.parent):
+            Add(views, Wardrobe(handle=handle, body=body, container=container))
+
+    query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    assert isinstance(all_solutions[0], Door)
+    assert all_solutions[0].handle.name == "Handle3"
+    assert all_solutions[0].body.name == "Body3"
+    assert isinstance(all_solutions[1], Wardrobe)
+    assert all_solutions[1].handle.name == "Handle4"
+    assert all_solutions[1].container.name == "Container2"
+    assert all_solutions[1].body.name == "Body4"
+    assert isinstance(all_solutions[2], Drawer)
+    assert all_solutions[2].container.name == "Container1"
+    assert all_solutions[2].handle.name == "Handle1"

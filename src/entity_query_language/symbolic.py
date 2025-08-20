@@ -983,17 +983,18 @@ class AND(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        seen_left_values = set()
+        seen_left_values = SeenSet()
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
+            left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
                 yield left_value
                 continue
-            values_for_right_leaves = tuple([(k, left_value[k]) for k in right_values_leaf_ids if k in left_value])
-            if values_for_right_leaves in seen_left_values:
+            values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
+            if seen_left_values.check(values_for_right_leaves):
                 continue
             else:
                 seen_left_values.add(values_for_right_leaves)
@@ -1063,17 +1064,17 @@ class ExceptIf(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        seen_left_values = set()
+        seen_left_values = SeenSet()
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
 
-            values_for_right_leaves = {(k, left_value[k]) for k in right_values_leaf_ids if k in left_value}
-            if seen_left_values and values_for_right_leaves.issubset(seen_left_values):
+            values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
+            if seen_left_values.check(values_for_right_leaves):
                 continue
             else:
-                seen_left_values.update(values_for_right_leaves)
+                seen_left_values.add(values_for_right_leaves)
 
             left_value = left_value.union(sources)
 
@@ -1095,6 +1096,8 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
     """
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
+    if isinstance(current_node._parent_, XOR):
+        current_node = current_node._parent_
     prev_parent = current_node._parent_
     new_conditions_root = XOR(current_node, new_branch)
     new_branch._node_.weight = RDREdge.Alternative
@@ -1103,6 +1106,27 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
         prev_parent.right = new_conditions_root
     return new_conditions_root.right
 
+class SeenSet:
+    def __init__(self):
+        # store list of partial assignments
+        self.seen = []
+
+    def add(self, assignment):
+        """
+        Add an assignment (dict of key→value).
+        Missing keys are implicitly wildcards.
+        Example: {"k1": "v1"} means all k2,... are allowed
+        """
+        self.seen.append(dict(assignment))
+
+    def check(self, assignment):
+        """
+        Check if an assignment (dict) is covered by seen entries.
+        """
+        for constraint in self.seen:
+            if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
+                return True
+        return False
 
 @dataclass(eq=False)
 class XOR(LogicalOperator):
@@ -1125,7 +1149,7 @@ class XOR(LogicalOperator):
         sources = sources or HashedIterable()
         seen_values = set()
         seen_right_values = set()
-        seen_negative_values = set()
+        seen_negative_values = SeenSet()
         shared_ids = list(map(lambda v: v.value._id_,
                          self.left._unique_variables_.intersection(self.right._unique_variables_)))
 
@@ -1134,8 +1158,8 @@ class XOR(LogicalOperator):
         for left_value in left_values:
             left_value = left_value.union(sources)
             if self.left._is_false_:
-                values_for_right_leaves = tuple([(k, left_value[k]) for k in shared_ids if k in left_value])
-                if values_for_right_leaves in seen_negative_values:
+                values_for_right_leaves = {k: left_value[k] for k in shared_ids if k in left_value}
+                if seen_negative_values.check(values_for_right_leaves):
                     continue
                 seen_negative_values.add(values_for_right_leaves)
                 right_values = self.right._evaluate__(left_value)
@@ -1151,7 +1175,6 @@ class XOR(LogicalOperator):
                                                                                   seen_right_values)
             else:
                 yield from self.update_conclusion_and_yield_operand_value(self.left, left_value, sources, seen_values)
-
 
     def update_conclusion_and_yield_operand_value(self, operand: SymbolicExpression, operand_value: HashedIterable,
                                                   sources: Optional[HashedIterable],

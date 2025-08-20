@@ -7,7 +7,7 @@ from .base_config import WorldConf, BodyConf, Connection, FixedConnectionConf, P
     ContainerConf, RevoluteConnectionConf, HandleConf
 
 from ...factories.world import create_world
-from .handles_and_containers import Handle1, Handle2, Handle3, Container1, Container2
+from .handles_and_containers import Handle1, Handle2, Handle3, Container1, Container2, Container3
 
 
 @dataclass
@@ -47,7 +47,8 @@ def bodies():
         Body3(), # 6
         Body4(), # 7
         Container1(), # 8
-        Container2() # 9
+        Container2(), # 9
+        Container3() # 10
     ]
 
 
@@ -59,7 +60,8 @@ class World(WorldConf):
         FixedConnectionConf(parent=Body2(), child=Handle2()),
         FixedConnectionConf(parent=Body4(), child=Handle4()),
         RevoluteConnectionConf(parent=Body3(), child=Handle3()),
-        RevoluteConnectionConf(parent=Container2(), child=Body4())
+        RevoluteConnectionConf(parent=Container2(), child=Body4()),
+        PrismaticConnectionConf(parent=Container3(), child=Container1())
     ], init=False)
     factory_method: Callable = field(default=create_world, init=False)
 
