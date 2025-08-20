@@ -457,6 +457,11 @@ class Conclusion(SymbolicExpression[T], ABC):
     def _all_variable_instances_(self) -> List[Variable]:
         return []
 
+    @property
+    def _name_(self) -> str:
+        value_str = self.value._type_.__name__ if isinstance(self.value, Variable) else str(self.value)
+        return f"{self.__class__.__name__}({self.var._name_}, {value_str})"
+
 
 @dataclass(eq=False)
 class Set(Conclusion[T]):
@@ -468,10 +473,6 @@ class Set(Conclusion[T]):
             parent_value = sources[self._parent_._id_]
         parent_value.value = self.value
         return sources
-
-    @property
-    def _name_(self) -> str:
-        return f"Set({self._parent_._name_}, {self.value})"
 
 
 @dataclass(eq=False)
@@ -487,10 +488,6 @@ class Add(Conclusion[T]):
         self.var._domain_[v.id_] = v
         sources[self.var._parent_variable_._id_] = v
         return sources
-
-    @property
-    def _name_(self) -> str:
-        return f"Add({self.var._name_}, {self.value})"
 
 
 @dataclass(eq=False)
