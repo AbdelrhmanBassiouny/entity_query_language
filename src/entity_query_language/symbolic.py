@@ -13,8 +13,7 @@ from typing_extensions import dataclass_transform, List, Tuple, Callable
 
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
-from .utils import is_iterable, render_tree
-from .utils import make_list, IDGenerator
+from .utils import make_list, IDGenerator, SeenSet, is_iterable, render_tree
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
 
@@ -206,10 +205,12 @@ class SymbolicExpression(Generic[T], ABC):
             self._child_ = child_cp
         self._child_._node_.parent = self._node_
 
-    def _copy_child_expression_(self):
-        child_cp = self._child_.__new__(self._child_.__class__)
-        child_cp.__dict__.update(self._child_.__dict__)
-        child_cp._create_node_(self._child_._node_.name + f"_{self._id_}")
+    def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
+        if child is None:
+            child = self._child_
+        child_cp = child.__new__(child.__class__)
+        child_cp.__dict__.update(child.__dict__)
+        child_cp._create_node_(child._node_.name + f"_{self._id_}")
         return child_cp
 
     def _create_node_(self, name: str):
@@ -854,7 +855,13 @@ class BinaryOperator(ConstrainingOperator, ABC):
         if not isinstance(self.right, SymbolicExpression):
             self.right = Variable._from_domain_([self.right])
         super().__post_init__()
-        for operand in [self.left, self.right]:
+        for i, operand in enumerate([self.left, self.right]):
+            if operand._node_.parent is not None and isinstance(operand, HasDomain):
+                operand = self._copy_child_expression_(operand)
+                if i == 0:
+                    self.left = operand
+                else:
+                    self.right = operand
             operand._node_.parent = self._node_
 
     @property
@@ -1106,27 +1113,6 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
         prev_parent.right = new_conditions_root
     return new_conditions_root.right
 
-class SeenSet:
-    def __init__(self):
-        # store list of partial assignments
-        self.seen = []
-
-    def add(self, assignment):
-        """
-        Add an assignment (dict of key→value).
-        Missing keys are implicitly wildcards.
-        Example: {"k1": "v1"} means all k2,... are allowed
-        """
-        self.seen.append(dict(assignment))
-
-    def check(self, assignment):
-        """
-        Check if an assignment (dict) is covered by seen entries.
-        """
-        for constraint in self.seen:
-            if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
-                return True
-        return False
 
 @dataclass(eq=False)
 class XOR(LogicalOperator):

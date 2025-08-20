@@ -45,6 +45,29 @@ class IDGenerator:
         return self._counter
 
 
+class SeenSet:
+    def __init__(self):
+        # store list of partial assignments
+        self.seen = []
+
+    def add(self, assignment):
+        """
+        Add an assignment (dict of key→value).
+        Missing keys are implicitly wildcards.
+        Example: {"k1": "v1"} means all k2,... are allowed
+        """
+        self.seen.append(dict(assignment))
+
+    def check(self, assignment):
+        """
+        Check if an assignment (dict) is covered by seen entries.
+        """
+        for constraint in self.seen:
+            if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
+                return True
+        return False
+
+
 def filter_data(data, selected_indices):
     data = iter(data)
     prev = -1
