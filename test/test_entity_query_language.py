@@ -454,7 +454,9 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
         Add(views, Drawer(handle=handle, container=body))
         with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
             Add(views, Door(handle=handle, body=body))
-        with alternative(handle.name.endswith('4'), body == revolute_connection.child, container == revolute_connection.parent):
+        with alternative(handle == fixed_connection.child, body == fixed_connection.parent,
+                         body == revolute_connection.child,
+                         container == revolute_connection.parent):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
     query._render_tree_()
