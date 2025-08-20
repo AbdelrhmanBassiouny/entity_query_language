@@ -1059,6 +1059,7 @@ class ExceptIf(LogicalOperator):
         """
         Evaluate the ExceptIf condition and yield the results.
         """
+
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
@@ -1134,19 +1135,20 @@ class XOR(LogicalOperator):
             left_value = left_value.union(sources)
             if self.left._is_false_:
                 values_for_right_leaves = tuple([(k, left_value[k]) for k in shared_ids if k in left_value])
-                if values_for_right_leaves not in seen_negative_values:
-                    seen_negative_values.add(values_for_right_leaves)
-                    right_values = self.right._evaluate__(left_value)
-                    for right_value in right_values:
-                        if self.right._is_false_:
+                if values_for_right_leaves in seen_negative_values:
+                    continue
+                seen_negative_values.add(values_for_right_leaves)
+                right_values = self.right._evaluate__(left_value)
+                for right_value in right_values:
+                    if self.right._is_false_:
+                        if self._yield_when_false_:
                             self._is_false_ = True
-                            if self._yield_when_false_:
-                                yield left_value.union(right_value)
-                        else:
+                            yield left_value.union(right_value)
                             self._is_false_ = False
-                            yield from self.update_conclusion_and_yield_operand_value(self.right, right_value,
-                                                                                      left_value,
-                                                                                      seen_right_values)
+                    else:
+                        yield from self.update_conclusion_and_yield_operand_value(self.right, right_value,
+                                                                                  left_value,
+                                                                                  seen_right_values)
             else:
                 yield from self.update_conclusion_and_yield_operand_value(self.left, left_value, sources, seen_values)
 
