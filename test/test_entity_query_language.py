@@ -1,16 +1,13 @@
-from typing import Iterable
 
 import pytest
-from graphviz import render
 
-from datasets import World, Wardrobe
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative
 from entity_query_language import And, Or, Not, contains, in_
 from entity_query_language.utils import render_tree
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
-    View
+    View, World, Wardrobe
 
 
 def  test_generate_with_using_attribute_and_callables(handles_and_containers_world):

@@ -4,6 +4,7 @@ import codecs
 import itertools
 import os
 import re
+from dataclasses import dataclass, field
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
@@ -45,10 +46,9 @@ class IDGenerator:
         return self._counter
 
 
+@dataclass
 class SeenSet:
-    def __init__(self):
-        # store list of partial assignments
-        self.seen = []
+    seen: List[Any] = field(default_factory=list, init=False)
 
     def add(self, assignment):
         """

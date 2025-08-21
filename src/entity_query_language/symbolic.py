@@ -4,6 +4,7 @@ import contextvars
 import operator
 import typing
 from abc import abstractmethod, ABC
+from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -124,6 +125,12 @@ class HashedIterable(Generic[T]):
         common_keys = self.values.keys() & other.values.keys()
         common_values = {k: self.values[k] for k in common_keys}
         return HashedIterable(values=common_values)
+
+    def difference(self, other):
+        common_keys = self.values.keys() & other.values.keys()
+        left_keys = self.values.keys() - other.values.keys()
+        values = {k: self.values[k] for k in left_keys}
+        return HashedIterable(values=values)
 
     def union(self, other):
         all_keys = self.values.keys() | other.values.keys()
@@ -845,6 +852,7 @@ class BinaryOperator(ConstrainingOperator, ABC):
     left: HasDomain
     right: HasDomain
     _child_: SymbolicExpression = field(init=False, default=None)
+    _parent_required_variables__: HashedIterable[Variable] = field(init=False, default_factory=HashedIterable)
 
     def __post_init__(self):
         if not isinstance(self.left, SymbolicExpression):
@@ -860,6 +868,16 @@ class BinaryOperator(ConstrainingOperator, ABC):
                 else:
                     self.right = operand
             operand._node_.parent = self._node_
+        if isinstance(self.left, BinaryOperator):
+            self.left._parent_required_variables__ = self.right._unique_variables_.intersection(self.left._unique_variables_)
+
+    @property
+    @lru_cache(maxsize=None)
+    def _parent_required_variables_(self):
+        if self._parent_ is None or isinstance(self._parent_, QueryObjectDescriptor):
+            return HashedIterable()
+        else:
+            return self._parent_required_variables__.union(self._parent_._parent_required_variables_)
 
     @property
     @lru_cache(maxsize=None)
@@ -971,9 +989,37 @@ class LogicalOperator(BinaryOperator, ABC):
     A symbolic operation that can be used to combine multiple symbolic expressions.
     """
 
+    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
+    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
+
     @property
     def _name_(self):
         return self.__class__.__name__
+
+    def update_output_cache(self, right_value, values_for_right_leaves):
+        right_only_values = {k: v for k, v in right_value.values.items() if k in self.right._unique_variables_}
+        values_for_right_leaves.update(right_only_values)
+        self.output_cache[tuple(sorted(values_for_right_leaves.items()))] = self._is_false_
+
+    def yield_values_from_cache_and_update_seen_parent_values(self, values_for_right_leaves,
+                                                              left_value, parent_leaf_ids):
+        output_for_parent = {k: v for k, v in left_value.values.items() if k in parent_leaf_ids}
+        if not self.seen_parent_values.check(output_for_parent):
+            # import pdb; pdb.set_trace()
+            self.seen_parent_values.add(output_for_parent)
+            for cached_k, output in self.output_cache.items():
+                cached_k_dict = dict(cached_k)
+                common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
+                if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
+                    continue
+                self._is_false_ = output
+                cached_output_values = HashedIterable(values=cached_k_dict)
+                yield left_value.union(cached_output_values)
+
+    def update_seen_parent_values(self, output: HashedIterable, parent_leaf_ids: Set[int]) -> None:
+        output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
+        if not self.seen_parent_values.check(output_for_parent):
+            self.seen_parent_values.add(output_for_parent)
 
 
 @dataclass(eq=False)
@@ -981,13 +1027,16 @@ class AND(LogicalOperator):
     """
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
+    seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
+    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
+    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        seen_left_values = SeenSet()
+        parent_leaf_ids = [leaf.id_ for leaf in self._parent_required_variables_.intersection(self._unique_variables_)]
+
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -996,12 +1045,15 @@ class AND(LogicalOperator):
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
                 yield left_value
+                self.update_seen_parent_values(left_value, parent_leaf_ids)
                 continue
             values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            if seen_left_values.check(values_for_right_leaves):
+            if self.seen_left_values.check(values_for_right_leaves):
+                yield from self.yield_values_from_cache_and_update_seen_parent_values(values_for_right_leaves,
+                                                                                      left_value, parent_leaf_ids)
                 continue
             else:
-                seen_left_values.add(values_for_right_leaves)
+                self.seen_left_values.add(values_for_right_leaves)
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1014,7 +1066,10 @@ class AND(LogicalOperator):
                         self._is_false_ = True
                     else:
                         self._is_false_ = False
-                yield left_value.union(right_value)
+                output = left_value.union(right_value)
+                yield output
+                self.update_seen_parent_values(output, parent_leaf_ids)
+                self.update_output_cache(right_value, values_for_right_leaves)
 
 
 @dataclass(eq=False)
@@ -1116,6 +1171,8 @@ class XOR(LogicalOperator):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
+    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
+    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -1135,6 +1192,7 @@ class XOR(LogicalOperator):
         seen_negative_values = SeenSet()
         shared_ids = list(map(lambda v: v.value._id_,
                          self.left._unique_variables_.intersection(self.right._unique_variables_)))
+        parent_leaf_ids = [var.id_ for var in self._parent_required_variables_.intersection(self._unique_variables_)]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -1143,34 +1201,44 @@ class XOR(LogicalOperator):
             if self.left._is_false_:
                 values_for_right_leaves = {k: left_value[k] for k in shared_ids if k in left_value}
                 if seen_negative_values.check(values_for_right_leaves):
+                    yield from self.yield_values_from_cache_and_update_seen_parent_values(values_for_right_leaves,
+                                                                                          left_value, parent_leaf_ids)
                     continue
                 seen_negative_values.add(values_for_right_leaves)
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:
-                    if self.right._is_false_:
-                        if self._yield_when_false_:
-                            self._is_false_ = True
-                            yield left_value.union(right_value)
-                            self._is_false_ = False
-                    else:
-                        yield from self.update_conclusion_and_yield_operand_value(self.right, right_value,
-                                                                                  left_value,
-                                                                                  seen_right_values)
+                    output = None
+                    if not self.right._is_false_:
+                        output = self.update_conclusion_and_return_operand_value(self.right, right_value,
+                                                                                 left_value,
+                                                                                 seen_right_values)
+                    elif self._yield_when_false_:
+                        self._is_false_ = True
+                        output = left_value.union(right_value)
+                    if output is not None:
+                        yield output
+                        self._conclusion_.clear()
+                    self.update_seen_parent_values(output, parent_leaf_ids)
+                    self.update_output_cache(right_value, values_for_right_leaves)
+                    self._is_false_ = False
             else:
-                yield from self.update_conclusion_and_yield_operand_value(self.left, left_value, sources, seen_values)
+                output = self.update_conclusion_and_return_operand_value(self.left, left_value, sources, seen_values)
+                if output is not None:
+                    yield output
+                    self._conclusion_.clear()
+                self.update_seen_parent_values(output, parent_leaf_ids)
 
-    def update_conclusion_and_yield_operand_value(self, operand: SymbolicExpression, operand_value: HashedIterable,
-                                                  sources: Optional[HashedIterable],
-                                                  seen_values: typing.Set)\
-            -> Iterable[HashedIterable]:
+    def update_conclusion_and_return_operand_value(self, operand: SymbolicExpression, operand_value: HashedIterable,
+                                                   sources: Optional[HashedIterable],
+                                                   seen_values: typing.Set)\
+            -> Optional[HashedIterable]:
         """
         Evaluate the operand of the XOR operation and yield the results.
         """
         if operand_value not in seen_values:
             self._conclusion_.update(operand._conclusion_)
             seen_values.add(operand_value)
-            yield sources.union(operand_value)
-            self._conclusion_.clear()
+            return sources.union(operand_value)
 
 
 def Not(operand: Any) -> SymbolicExpression:
