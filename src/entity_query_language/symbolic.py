@@ -869,7 +869,7 @@ class BinaryOperator(ConstrainingOperator, ABC):
                     self.right = operand
             operand._node_.parent = self._node_
         if isinstance(self.left, BinaryOperator):
-            self.left._parent_required_variables__ = self.right._unique_variables_.intersection(self.left._unique_variables_)
+            self.left._parent_required_variables__ = self.right._unique_variables_
 
     @property
     @lru_cache(maxsize=None)
@@ -1003,18 +1003,23 @@ class LogicalOperator(BinaryOperator, ABC):
 
     def yield_values_from_cache_and_update_seen_parent_values(self, values_for_right_leaves,
                                                               left_value, parent_leaf_ids):
-        output_for_parent = {k: v for k, v in left_value.values.items() if k in parent_leaf_ids}
-        if not self.seen_parent_values.check(output_for_parent):
-            # import pdb; pdb.set_trace()
-            self.seen_parent_values.add(output_for_parent)
-            for cached_k, output in self.output_cache.items():
-                cached_k_dict = dict(cached_k)
-                common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
-                if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
-                    continue
-                self._is_false_ = output
-                cached_output_values = HashedIterable(values=cached_k_dict)
-                yield left_value.union(cached_output_values)
+        for cached_k, output in self.output_cache.items():
+            cached_k_dict = dict(cached_k)
+            common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
+            if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
+                continue
+            self._is_false_ = output
+            cached_output_values = HashedIterable(values=cached_k_dict)
+            output = left_value.union(cached_output_values)
+            output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
+            # if 4 in output_for_parent and output_for_parent[4].value.name == "Body4":
+                # import pdb; pdb.set_trace()
+            if not self.seen_parent_values.check(output_for_parent):
+                # import pdb; pdb.set_trace()
+                self.seen_parent_values.add(output_for_parent)
+                # if not self._is_false_:
+                #     self._conclusion_ = self.right._conclusion_
+                yield output
 
     def update_seen_parent_values(self, output: HashedIterable, parent_leaf_ids: Set[int]) -> None:
         output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
@@ -1035,7 +1040,7 @@ class AND(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        parent_leaf_ids = [leaf.id_ for leaf in self._parent_required_variables_.intersection(self._unique_variables_)]
+        parent_leaf_ids = [leaf.id_ for leaf in self._parent_required_variables_]
 
 
         # constrain left values by available sources
@@ -1192,7 +1197,7 @@ class XOR(LogicalOperator):
         seen_negative_values = SeenSet()
         shared_ids = list(map(lambda v: v.value._id_,
                          self.left._unique_variables_.intersection(self.right._unique_variables_)))
-        parent_leaf_ids = [var.id_ for var in self._parent_required_variables_.intersection(self._unique_variables_)]
+        parent_leaf_ids = [var.id_ for var in self._parent_required_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -1209,6 +1214,7 @@ class XOR(LogicalOperator):
                 for right_value in right_values:
                     output = None
                     if not self.right._is_false_:
+                        self._is_false_ = False
                         output = self.update_conclusion_and_return_operand_value(self.right, right_value,
                                                                                  left_value,
                                                                                  seen_right_values)
@@ -1220,8 +1226,8 @@ class XOR(LogicalOperator):
                         self._conclusion_.clear()
                     self.update_seen_parent_values(output, parent_leaf_ids)
                     self.update_output_cache(right_value, values_for_right_leaves)
-                    self._is_false_ = False
             else:
+                self._is_false_ = False
                 output = self.update_conclusion_and_return_operand_value(self.left, left_value, sources, seen_values)
                 if output is not None:
                     yield output
