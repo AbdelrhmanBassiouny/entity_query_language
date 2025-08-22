@@ -886,8 +886,13 @@ class BinaryOperator(ConstrainingOperator, ABC):
     @property
     @lru_cache(maxsize=None)
     def _parent_required_variables_(self):
-        if self._parent_ is None or isinstance(self._parent_, QueryObjectDescriptor):
+        if self._parent_ is None or isinstance(self._parent_, ResultQuantifier):
             return HashedIterable()
+        elif isinstance(self._parent_, Entity):
+            return HashedIterable(values={self._parent_.selected_variable_._id_:
+                                              HashedValue(self._parent_.selected_variable_)})
+        elif isinstance(self._parent_, SetOf):
+            return HashedIterable(values={var._id_: HashedValue(var) for var in self._parent_.selected_variables_})
         else:
             return self._parent_required_variables__.union(self._parent_._parent_required_variables_)
 
@@ -1013,8 +1018,7 @@ class LogicalOperator(BinaryOperator, ABC):
         values_for_right_leaves.update(right_only_values)
         self.output_cache[tuple(sorted(values_for_right_leaves.items()))] = self._is_false_
 
-    def yield_values_from_cache_and_update_seen_parent_values(self, values_for_right_leaves,
-                                                              left_value, parent_leaf_ids):
+    def yield_values_from_cache(self, values_for_right_leaves, left_value):
         for cached_k, output in self.output_cache.items():
             cached_k_dict = dict(cached_k)
             common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
@@ -1025,16 +1029,7 @@ class LogicalOperator(BinaryOperator, ABC):
             self._is_false_ = output
             cached_output_values = HashedIterable(values=cached_k_dict)
             output = left_value.union(cached_output_values)
-            output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
-
-            if not self.seen_parent_values.check(output_for_parent):
-                self.seen_parent_values.add(output_for_parent)
-                yield output
-
-    def update_seen_parent_values(self, output: HashedIterable, parent_leaf_ids: Set[int]) -> None:
-        output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
-        if not self.seen_parent_values.check(output_for_parent):
-            self.seen_parent_values.add(output_for_parent)
+            yield output
 
 
 @dataclass(eq=False)
@@ -1043,12 +1038,12 @@ class AND(LogicalOperator):
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
-    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
+    seen_right_values: SeenSet = field(default_factory=SeenSet, init=False)
     output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
 
     @property
     def _should_cache_output_(self):
-        return True
+        return self._yield_when_false_
         return (self._receives_values_from_an_or_node
                 or self._is_in_right_branch_of_an_xor_that_has_and_nodes_in_left_branch)
 
@@ -1060,20 +1055,23 @@ class AND(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        parent_leaf_ids = [leaf.id_ for leaf in self._parent_required_variables_]
+        parent_var_ids = [var.value._id_ for var in self._parent_required_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
+                output_for_parent = {k: v for k, v in left_value.values.items() if k in parent_var_ids}
+                if self.seen_left_values.check(output_for_parent):
+                    continue
+                self.seen_left_values.add(output_for_parent)
                 self._is_false_ = True
                 yield left_value
                 continue
+
             values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
             if self.seen_left_values.check(values_for_right_leaves):
-                yield from self.yield_values_from_cache_and_update_seen_parent_values(values_for_right_leaves,
-                                                                                      left_value, parent_leaf_ids)
                 continue
             else:
                 self.seen_left_values.add(values_for_right_leaves)
@@ -1084,15 +1082,18 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
+                right_value = right_value.union(left_value)
                 if self._yield_when_false_:
                     if self.right._is_false_:
                         self._is_false_ = True
                     else:
                         self._is_false_ = False
-                output = left_value.union(right_value)
-                yield output
-                if self._should_cache_output_:
-                    self.update_output_cache(right_value, values_for_right_leaves)
+                output_for_parent = {k: v for k, v in right_value.values.items()
+                                     if k in parent_var_ids}
+                if self.seen_right_values.check(output_for_parent):
+                    continue
+                self.seen_right_values.add(output_for_parent)
+                yield right_value
 
 
 @dataclass(eq=False)
@@ -1100,6 +1101,7 @@ class OR(LogicalOperator):
     """
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
+    seen_values: SeenSet = field(default_factory=SeenSet, init=False)
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
@@ -1115,6 +1117,10 @@ class OR(LogicalOperator):
             operand_values = operand._evaluate__(sources)
 
             for operand_value in operand_values:
+                output_for_parent = {k: v for k, v in operand_value.values.items() if k in self._parent_required_variables_}
+                if self.seen_values.check(output_for_parent):
+                    continue
+                self.seen_values.add(output_for_parent)
                 yield sources.union(operand_value)
 
 
@@ -1189,7 +1195,6 @@ class XOR(LogicalOperator):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
-    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
     output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
     seen_left_negative_values_values: SeenSet = field(default_factory=SeenSet, init=False)
 
@@ -1208,7 +1213,6 @@ class XOR(LogicalOperator):
         sources = sources or HashedIterable()
         shared_ids = list(map(lambda v: v.value._id_,
                          self.left._unique_variables_.intersection(self.right._unique_variables_)))
-        parent_leaf_ids = [var.id_ for var in self._parent_required_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -1217,8 +1221,7 @@ class XOR(LogicalOperator):
             if self.left._is_false_:
                 values_for_right_leaves = {k: left_value[k] for k in shared_ids if k in left_value}
                 if self.seen_left_negative_values_values.check(values_for_right_leaves):
-                    yield from self.yield_values_from_cache_and_update_seen_parent_values(values_for_right_leaves,
-                                                                                          left_value, parent_leaf_ids)
+                    yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
                     continue
                 self.seen_left_negative_values_values.add(values_for_right_leaves)
                 right_values = self.right._evaluate__(left_value)
@@ -1231,7 +1234,6 @@ class XOR(LogicalOperator):
                     output = left_value.union(right_value)
                     yield output
                     self._conclusion_.clear()
-                    self.update_seen_parent_values(output, parent_leaf_ids)
                     self.update_output_cache(right_value, values_for_right_leaves)
             else:
                 self._is_false_ = False

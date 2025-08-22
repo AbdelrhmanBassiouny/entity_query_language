@@ -263,6 +263,8 @@ def test_not_and_or(handles_and_containers_world):
     assert all(
         h.name not in ["Handle1", "Container1"] for h in
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
+    print(f"\nCache Search Count = {_cache_search_count.values}")
+    print(f"\nCache Match Count = {_cache_match_count.values}")
     # query._render_tree_()
 
 
@@ -470,6 +472,6 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert isinstance(all_solutions[2], Drawer)
     assert all_solutions[2].container.name == "Container1"
     assert all_solutions[2].handle.name == "Handle1"
-    # print(f"\nCache Search Count = {_cache_search_count.values}")
-    # print(f"\nCache Match Count = {_cache_match_count.values}")
+    print(f"\nCache Search Count = {_cache_search_count.values}")
+    print(f"\nCache Match Count = {_cache_match_count.values}")
     # print(f"\nCache Match Percent = {_cache_match_count.val/_cache_search_count.val}")
