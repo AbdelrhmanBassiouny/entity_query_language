@@ -1012,13 +1012,9 @@ class LogicalOperator(BinaryOperator, ABC):
             cached_output_values = HashedIterable(values=cached_k_dict)
             output = left_value.union(cached_output_values)
             output_for_parent = {k: v for k, v in output.values.items() if k in parent_leaf_ids}
-            # if 4 in output_for_parent and output_for_parent[4].value.name == "Body4":
-                # import pdb; pdb.set_trace()
+
             if not self.seen_parent_values.check(output_for_parent):
-                # import pdb; pdb.set_trace()
                 self.seen_parent_values.add(output_for_parent)
-                # if not self._is_false_:
-                #     self._conclusion_ = self.right._conclusion_
                 yield output
 
     def update_seen_parent_values(self, output: HashedIterable, parent_leaf_ids: Set[int]) -> None:
