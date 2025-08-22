@@ -1,22 +1,23 @@
-
 import pytest
 
+from entity_query_language import And, Or, Not, contains, in_
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, _cache_search_count
-from entity_query_language import And, Or, Not, contains, in_
+from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, _cache_search_count, \
+    _cache_match_count
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View, World, Wardrobe
 
 
-def  test_generate_with_using_attribute_and_callables(handles_and_containers_world):
+def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
     """
     Test the generation of handles in the HandlesAndContainersWorld.
     """
     world = handles_and_containers_world
 
     def generate_handles():
-        yield from an(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Handle"))).evaluate()
+        yield from an(
+            entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Handle"))).evaluate()
 
     handles = list(generate_handles())
     assert len(handles) == 3, "Should generate at least one handle."
@@ -119,11 +120,13 @@ def test_generate_with_and_or(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_handles_and_container1():
-        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
+        query = an(entity(body := let("body", type_=Body, domain=world.bodies),
                              Or(contains(body.name, "Handle"), contains(body.name, '1'))
                              , Or(contains(body.name, 'Container'), contains(body.name, '1'))
                              )
-                      ).evaluate()
+                      )
+        # query._render_tree_()
+        yield from query.evaluate()
 
     handles_and_container1 = list(generate_handles_and_container1())
     assert len(handles_and_container1) == 2, "Should generate at least one handle."
@@ -133,10 +136,12 @@ def test_generate_with_multi_and(handles_and_containers_world):
     world = handles_and_containers_world
 
     def generate_container1():
-        yield from an(entity(body := let("body", type_=Body, domain=world.bodies),
+        query = an(entity(body := let("body", type_=Body, domain=world.bodies),
                              contains(body.name, "n"), contains(body.name, '1')
-                             , contains(body.name, 'C'))).evaluate()
+                             , contains(body.name, 'C')))
 
+        # query._render_tree_()
+        yield from query.evaluate()
     all_solutions = list(generate_container1())
     assert len(all_solutions) == 1, "Should generate one container."
     assert isinstance(all_solutions[0], Container), "The generated item should be of type Container."
@@ -176,15 +181,16 @@ def test_sources(handles_and_containers_world):
     drawer_components = (container, handle, fixed_connection, prismatic_connection)
 
     query = an(set_of(drawer_components,
-                          container == fixed_connection.parent,
-                          handle == fixed_connection.child,
-                          container == prismatic_connection.child
-                          )
-                   )
+                      container == fixed_connection.parent,
+                      handle == fixed_connection.child,
+                      container == prismatic_connection.child
+                      )
+               )
     # render_tree(handle._sources_[0]._node_.root, use_dot_exporter=True, view=True)
     sources = query._sources_
     assert len(sources) == 1, "Should have one sources."
     assert sources[0] == world, "The source should be the world."
+
 
 def test_the(handles_and_containers_world):
     world = handles_and_containers_world
@@ -218,24 +224,24 @@ def test_not_comparator(handles_and_containers_world):
 
 def test_not_and(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                            Not(contains(body.name, "Handle") & contains(body.name, '1'))
-                            )
-                     ).evaluate()
+    query = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                      Not(contains(body.name, "Handle") & contains(body.name, '1'))
+                      )
+               )
 
-    all_not_handle1 = list(not_handle1)
+    all_not_handle1 = list(query.evaluate())
     assert len(all_not_handle1) == 5, "Should generate 5 bodies"
     assert all(h.name != "Handle1" for h in all_not_handle1), "All generated items should satisfy query"
 
 
 def test_not_or(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1_or2 = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                                Not(contains(body.name, "Handle1") | contains(body.name, 'Handle2'))
-                                )
-                         ).evaluate()
+    query = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                      Not(contains(body.name, "Handle1") | contains(body.name, 'Handle2'))
+                      )
+               )
 
-    all_not_handle1_or2 = list(not_handle1_or2)
+    all_not_handle1_or2 = list(query.evaluate())
     assert len(all_not_handle1_or2) == 4, "Should generate 4 bodies"
     assert all(
         h.name not in ["Handle1", "Handle2"] for h in all_not_handle1_or2), "All generated items should satisfy query"
@@ -243,20 +249,21 @@ def test_not_or(handles_and_containers_world):
 
 def test_not_and_or(handles_and_containers_world):
     world = handles_and_containers_world
-    not_handle1_and_not_container1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                                               Not(Or(And(contains(body.name, "Handle"),
-                                                          contains(body.name, '1'))
-                                                      , And(contains(body.name, 'Container'),
-                                                            contains(body.name, '1'))
-                                                      ))
-                                               )
-                                        ).evaluate()
+    query = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                      Not(Or(And(contains(body.name, "Handle"),
+                                 contains(body.name, '1'))
+                             , And(contains(body.name, 'Container'),
+                                   contains(body.name, '1'))
+                             ))
+                      )
+               )
 
-    all_not_handle1_and_not_container1 = list(not_handle1_and_not_container1)
+    all_not_handle1_and_not_container1 = list(query.evaluate())
     assert len(all_not_handle1_and_not_container1) == 4, "Should generate 4 bodies"
     assert all(
         h.name not in ["Handle1", "Container1"] for h in
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
+    # query._render_tree_()
 
 
 def test_not_and_or_with_domain_mapping(handles_and_containers_world):
@@ -307,10 +314,10 @@ def test_add_conclusion(handles_and_containers_world):
     prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
 
     query = an(entity(drawers := let("drawers", type_=Drawer),
-                          And(container == fixed_connection.parent,
-                              handle == fixed_connection.child,
-                              container == prismatic_connection.child))
-                   )
+                      And(container == fixed_connection.parent,
+                          handle == fixed_connection.child,
+                          container == prismatic_connection.child))
+               )
     with SymbolicRule(query):
         Add(drawers, Drawer(handle=handle, container=container))
 
@@ -329,11 +336,8 @@ def test_add_conclusion(handles_and_containers_world):
 def test_rule_tree_with_a_refinement(doors_and_drawers_world):
     world = let("world", type_=World, domain=doors_and_drawers_world)
     body = let("body", type_=Body, domain=world.bodies)
-    container = let("container", type_=Container, domain=world.bodies)
     handle = let("handle", type_=Handle, domain=world.bodies)
     fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
-    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
 
     query = an(entity(drawers_and_doors := let("drawers_and_doors", type_=View),
                       body == fixed_connection.parent,
@@ -365,7 +369,6 @@ def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
     container = let("container", type_=Container, domain=world.bodies)
     handle = let("handle", type_=Handle, domain=world.bodies)
     fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
     revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
 
     query = an(entity(views := let("views", type_=View),
@@ -398,10 +401,8 @@ def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
 def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     world = let("world", type_=World, domain=doors_and_drawers_world)
     body = let("body", type_=Body, domain=world.bodies)
-    container = let("container", type_=Container, domain=world.bodies)
     handle = let("handle", type_=Handle, domain=world.bodies)
     fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
     revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
 
     query = an(entity(views := let("views", type_=View),
@@ -469,4 +470,6 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert isinstance(all_solutions[2], Drawer)
     assert all_solutions[2].container.name == "Container1"
     assert all_solutions[2].handle.name == "Handle1"
-    print(f"\nCache Search Count = {_cache_search_count.val}")
+    # print(f"\nCache Search Count = {_cache_search_count.values}")
+    # print(f"\nCache Match Count = {_cache_match_count.values}")
+    # print(f"\nCache Match Percent = {_cache_match_count.val/_cache_search_count.val}")

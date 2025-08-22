@@ -4,9 +4,11 @@ import codecs
 import itertools
 import os
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
+from typing import Iterable
 
 try:
     import six
@@ -66,6 +68,25 @@ class SeenSet:
             if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
                 return True
         return False
+
+
+class SeenSetWithPatterns:
+    def __init__(self):
+        self.seen = []
+        self.pattern_cache = defaultdict(list)  # key → dict of patterns
+
+    def add(self, assignment, outputs: Iterable):
+        d = dict(assignment)
+        self.seen.append(d)
+        pattern = tuple(sorted(d.items()))
+        self.pattern_cache[pattern].extend(outputs)
+
+    def retrieve(self, assignment) -> Optional[List]:
+        for pattern, values in self.pattern_cache.items():
+            proj = tuple(sorted((k, assignment.get(k)) for k, _ in pattern))
+            if proj in self.pattern_cache:
+                return self.pattern_cache[proj]
+        return None
 
 
 def filter_data(data, selected_indices):
