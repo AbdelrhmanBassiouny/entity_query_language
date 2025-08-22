@@ -5,7 +5,6 @@ from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative
 from entity_query_language import And, Or, Not, contains, in_
-from entity_query_language.utils import render_tree
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View, World, Wardrobe
 
@@ -380,7 +379,7 @@ def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
             with alternative(body == revolute_connection.child, container == revolute_connection.parent):
                 Add(views, Wardrobe(handle=handle, body=body, container=container))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
@@ -414,7 +413,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
         with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
             Add(views, Door(handle=handle, body=body))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 4, "Should generate 1 drawer, 1 door and 1 wardrobe."
@@ -456,7 +455,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
                          container == revolute_connection.parent):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
