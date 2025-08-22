@@ -3,7 +3,7 @@ import pytest
 
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative
+from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, _cache_search_count
 from entity_query_language import And, Or, Not, contains, in_
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View, World, Wardrobe
@@ -469,3 +469,4 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert isinstance(all_solutions[2], Drawer)
     assert all_solutions[2].container.name == "Container1"
     assert all_solutions[2].handle.name == "Handle1"
+    print(f"\nCache Search Count = {_cache_search_count.val}")

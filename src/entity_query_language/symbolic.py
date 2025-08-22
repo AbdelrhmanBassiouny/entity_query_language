@@ -186,6 +186,16 @@ class HashedIterable(Generic[T]):
 id_generator = IDGenerator()
 
 
+class CacheSearchCount:
+    val: int = 0
+
+    def update(self):
+        self.val += 1
+
+
+_cache_search_count = CacheSearchCount()
+
+
 @dataclass(eq=False)
 class SymbolicExpression(Generic[T], ABC):
     _child_: Optional[SymbolicExpression] = field(init=False)
@@ -1003,9 +1013,11 @@ class LogicalOperator(BinaryOperator, ABC):
 
     def yield_values_from_cache_and_update_seen_parent_values(self, values_for_right_leaves,
                                                               left_value, parent_leaf_ids):
+        global _cache_search_count
         for cached_k, output in self.output_cache.items():
             cached_k_dict = dict(cached_k)
             common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
+            _cache_search_count.update()
             if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
                 continue
             self._is_false_ = output
