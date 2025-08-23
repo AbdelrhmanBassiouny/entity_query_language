@@ -104,6 +104,10 @@ class HashedIterable(Generic[T]):
             self.values[value.id_] = value
         return self
 
+    def update(self, iterable: Iterable[HashedValue[T]]):
+        for v in iterable:
+            self.add(v)
+
     def __iter__(self):
         """
         Iterate over the hashed values.
@@ -133,6 +137,8 @@ class HashedIterable(Generic[T]):
         return HashedIterable(values=values)
 
     def union(self, other):
+        if not isinstance(other, HashedIterable):
+            other = HashedIterable(values={HashedValue(v).id_: HashedValue(v) for v in make_list(other)})
         all_keys = self.values.keys() | other.values.keys()
         all_values = {k: self.values.get(k, other.values.get(k)) for k in all_keys}
         return HashedIterable(values=all_values)
@@ -228,7 +234,7 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Variable._from_domain_([v])
         for k, v in children.items():
-            if v._node_.parent is not None and isinstance(v, HasDomain):
+            if v._node_.parent is not None and isinstance(v, (HasDomain, Source)):
                 children[k] = self._copy_child_expression_(v)
             children[k]._node_.parent = self._node_
         return tuple(children.values())
@@ -252,6 +258,9 @@ class SymbolicExpression(Generic[T], ABC):
         This method should be implemented by subclasses.
         """
         pass
+
+    def _add_conclusion_(self, conclusion: Conclusion):
+        self._conclusion_.add(conclusion)
 
     @property
     def _parent_(self) -> Optional[SymbolicExpression]:
@@ -393,6 +402,10 @@ class Source(SymbolicExpression[T]):
     def _name_(self) -> str:
         return self._name__
 
+    @property
+    def _source_(self) -> Source:
+        return self._node_.leaves[0]._expression_
+
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
         return self._value_
 
@@ -482,12 +495,12 @@ class Conclusion(SymbolicExpression[T], ABC):
         if current_parent is None:
             current_parent = self._conditions_root_
         self._parent_ = current_parent
-        self._parent_._conclusion_.add(self)
+        self._parent_._add_conclusion_(self)
 
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return []
+        return self.var._all_variable_instances_ + self.value._all_variable_instances_
 
     @property
     def _name_(self) -> str:
@@ -621,6 +634,10 @@ class HasDomain(SymbolicExpression, ABC):
             else:
                 self._domain_ = HashedIterable([HashedValue(self._domain_)])
         super().__post_init__()
+
+    @property
+    def _source_(self) -> HasDomain:
+        return self._node_.leaves[0]._expression_
 
     def __iter__(self):
         yield from self._domain_
@@ -883,16 +900,24 @@ class BinaryOperator(ConstrainingOperator, ABC):
         if isinstance(self.left, BinaryOperator):
             self.left._parent_required_variables__ = self.right._unique_variables_
 
+    def _add_conclusion_(self, conclusion: Conclusion) -> None:
+        super()._add_conclusion_(conclusion)
+        if isinstance(self.left, BinaryOperator):
+            self.left._parent_required_variables__.update(conclusion._unique_variables_)
+
     @property
     @lru_cache(maxsize=None)
     def _parent_required_variables_(self):
         if self._parent_ is None or isinstance(self._parent_, ResultQuantifier):
             return HashedIterable()
         elif isinstance(self._parent_, Entity):
-            return HashedIterable(values={self._parent_.selected_variable_._id_:
-                                              HashedValue(self._parent_.selected_variable_)})
+            vars = HashedIterable()
+            vars.add(self._parent_.selected_variable_)
+            return vars
         elif isinstance(self._parent_, SetOf):
-            return HashedIterable(values={var._id_: HashedValue(var) for var in self._parent_.selected_variables_})
+            vars = HashedIterable()
+            vars.update(self._parent_.selected_variables_)
+            return vars
         else:
             return self._parent_required_variables__.union(self._parent_._parent_required_variables_)
 

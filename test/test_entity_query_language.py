@@ -5,6 +5,7 @@ from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, _cache_search_count, \
     _cache_match_count, _cache_enter_count
+from entity_query_language.utils import render_tree
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View, World, Wardrobe
 
@@ -188,8 +189,8 @@ def test_sources(handles_and_containers_world):
                )
     # render_tree(handle._sources_[0]._node_.root, use_dot_exporter=True, view=True)
     sources = query._sources_
-    assert len(sources) == 1, "Should have one sources."
-    assert sources[0] == world, "The source should be the world."
+    assert len(sources) == 1, "Should have four sources."
+    assert sources[0] == world , "The source should be the world."
 
 
 def test_the(handles_and_containers_world):
