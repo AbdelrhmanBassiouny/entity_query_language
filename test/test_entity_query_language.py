@@ -4,7 +4,7 @@ from entity_query_language import And, Or, Not, contains, in_
 from entity_query_language.entity import an, entity, set_of, let, the
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, _cache_search_count, \
-    _cache_match_count
+    _cache_match_count, _cache_enter_count
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
     View, World, Wardrobe
 
@@ -458,7 +458,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
                          container == revolute_connection.parent):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
-    # query._render_tree_()
+    query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
@@ -472,6 +472,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert isinstance(all_solutions[2], Drawer)
     assert all_solutions[2].container.name == "Container1"
     assert all_solutions[2].handle.name == "Handle1"
+    print(f"\nCache Enter Count = {_cache_enter_count.values}")
     print(f"\nCache Search Count = {_cache_search_count.values}")
     print(f"\nCache Match Count = {_cache_match_count.values}")
-    # print(f"\nCache Match Percent = {_cache_match_count.val/_cache_search_count.val}")
+    # print(f"\nCache Match Percent = {_cache_match_count.values/_cache_search_count.values}")

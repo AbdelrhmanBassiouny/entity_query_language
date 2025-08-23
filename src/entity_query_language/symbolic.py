@@ -194,6 +194,7 @@ class CacheCount:
         self.values[name] += 1
 
 
+_cache_enter_count = CacheCount()
 _cache_search_count = CacheCount()
 _cache_match_count = CacheCount()
 
@@ -219,10 +220,18 @@ class SymbolicExpression(Generic[T], ABC):
             self._id_expression_map_[self._id_] = self
 
     def _update_child_(self):
-        if self._child_._node_.parent is not None:
-            child_cp = self._copy_child_expression_()
-            self._child_ = child_cp
-        self._child_._node_.parent = self._node_
+        self._child_ = self._update_children_(self._child_)[0]
+
+    def _update_children_(self, *children: SymbolicExpression) -> Tuple[SymbolicExpression, ...]:
+        children: Dict[int, SymbolicExpression] = dict(enumerate(children))
+        for k, v in children.items():
+            if not isinstance(v, SymbolicExpression):
+                children[k] = Variable._from_domain_([v])
+        for k, v in children.items():
+            if v._node_.parent is not None and isinstance(v, HasDomain):
+                children[k] = self._copy_child_expression_(v)
+            children[k]._node_.parent = self._node_
+        return tuple(children.values())
 
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
         if child is None:
@@ -464,7 +473,11 @@ class Conclusion(SymbolicExpression[T], ABC):
 
     def __post_init__(self):
         super().__post_init__()
+
+        self.var, self.value = self._update_children_(self.var, self.value)
+
         self._node_.weight = RDREdge.Then
+
         current_parent = SymbolicExpression._current_parent_()
         if current_parent is None:
             current_parent = self._conditions_root_
@@ -496,11 +509,6 @@ class Set(Conclusion[T]):
 
 @dataclass(eq=False)
 class Add(Conclusion[T]):
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not isinstance(self.value, SymbolicExpression):
-            self.value = Variable._from_domain_(self.value)
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         v = next(iter(self.value._evaluate__(sources)))
@@ -712,11 +720,14 @@ class Variable(HasDomain):
             self._child_ = None
         super().__post_init__()
         if self._cls_kwargs_:
+            domain_sources = []
             for k, v in self._cls_kwargs_.items():
                 if isinstance(v, HasDomain):
-                    self._domain_sources_.append(v)
+                    domain_sources.append(v)
                 else:
-                    self._domain_sources_.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
+                    domain_sources.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
+            self._domain_sources_.extend(domain_sources)
+            _ = self._update_children_(*domain_sources)
 
     def _evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedValue]:
         """
@@ -867,19 +878,8 @@ class BinaryOperator(ConstrainingOperator, ABC):
     _parent_required_variables__: HashedIterable[Variable] = field(init=False, default_factory=HashedIterable)
 
     def __post_init__(self):
-        if not isinstance(self.left, SymbolicExpression):
-            self.left = Variable._from_domain_([self.left])
-        if not isinstance(self.right, SymbolicExpression):
-            self.right = Variable._from_domain_([self.right])
         super().__post_init__()
-        for i, operand in enumerate([self.left, self.right]):
-            if operand._node_.parent is not None and isinstance(operand, HasDomain):
-                operand = self._copy_child_expression_(operand)
-                if i == 0:
-                    self.left = operand
-                else:
-                    self.right = operand
-            operand._node_.parent = self._node_
+        self.left, self.right = self._update_children_(self.left, self.right)
         if isinstance(self.left, BinaryOperator):
             self.left._parent_required_variables__ = self.right._unique_variables_
 
@@ -1019,6 +1019,7 @@ class LogicalOperator(BinaryOperator, ABC):
         self.output_cache[tuple(sorted(values_for_right_leaves.items()))] = self._is_false_
 
     def yield_values_from_cache(self, values_for_right_leaves, left_value):
+        _cache_enter_count.update(self._node_.name)
         for cached_k, output in self.output_cache.items():
             cached_k_dict = dict(cached_k)
             common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
@@ -1088,11 +1089,6 @@ class AND(LogicalOperator):
                         self._is_false_ = True
                     else:
                         self._is_false_ = False
-                output_for_parent = {k: v for k, v in right_value.values.items()
-                                     if k in parent_var_ids}
-                if self.seen_right_values.check(output_for_parent):
-                    continue
-                self.seen_right_values.add(output_for_parent)
                 yield right_value
 
 
