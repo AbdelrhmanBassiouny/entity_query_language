@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+import rustworkx
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
 from typing_extensions import dataclass_transform, List, Tuple, Callable
@@ -910,13 +911,9 @@ class BinaryOperator(ConstrainingOperator, ABC):
     def _parent_required_variables_(self):
         if self._parent_ is None or isinstance(self._parent_, ResultQuantifier):
             return HashedIterable()
-        elif isinstance(self._parent_, Entity):
+        elif isinstance(self._parent_, QueryObjectDescriptor):
             vars = HashedIterable()
-            vars.add(self._parent_.selected_variable_)
-            return vars
-        elif isinstance(self._parent_, SetOf):
-            vars = HashedIterable()
-            vars.update(self._parent_.selected_variables_)
+            vars.update(self._parent_._unique_variables_)
             return vars
         else:
             return self._parent_required_variables__.union(self._parent_._parent_required_variables_)
@@ -940,6 +937,9 @@ class Comparator(BinaryOperator):
     right: HasDomain
     operation: Callable[[Any, Any], bool]
     _invert__: bool = field(init=False, default=False)
+    _cache_: rustworkx.PyGraph[HashedValue] = field(init=False,
+                                                    default_factory=lambda: rustworkx.PyGraph(multigraph=False))
+    _node_idx_map_: Dict[HashedValue, int] = field(init=False, default_factory=dict)
 
     @property
     def _invert_(self):
@@ -989,27 +989,41 @@ class Comparator(BinaryOperator):
         source and the source has been exhausted.
         """
         sources = sources or HashedIterable()
-        if self.right._parent_variable_._id_ not in sources:
-            left_values = self.left._evaluate__(sources)
-            for left_value in left_values:
-                right_values = self.right._evaluate__(sources)
-                for right_value in right_values:
-                    res = self.check(left_value, right_value)
-                    if res:
-                        self._is_false_ = False
-                        yield res
-                    elif self._yield_when_false_:
-                        self._is_false_ = True
-                        yield self.get_result_domain(left_value, right_value)
 
+
+        if self.left._parent_variable_._id_ in sources:
+            order_operand_map = {'first': self.left, 'second': self.right}
         else:
-            right_values = self.right._evaluate__(sources)
-            for right_value in right_values:
-                left_values = self.left._evaluate__(sources)
-                for left_value in left_values:
-                    res = self.check(left_value, right_value)
-                    if res:
-                        yield res
+            order_operand_map = {'first': self.right, 'second': self.left}
+
+        first_values = order_operand_map['first']._evaluate__(sources)
+        for first_value in first_values:
+            operand_value_map = {order_operand_map['first']: first_value}
+            if first_value not in self._cache_.nodes():
+                # first_idx = self._cache_.add_node(first_value)
+                # self._node_idx_map_[first_value] = first_idx
+                second_values = order_operand_map['second']._evaluate__(sources)
+                for second_value in second_values:
+                    operand_value_map[order_operand_map['second']] = second_value
+                    # if second_value not in self._cache_.nodes():
+                        # second_idx = self._cache_.add_node(second_value)
+                        # self._node_idx_map_[first_value] = first_idx
+                    # else:
+                    #     second_idx = self._node_idx_map_[second_value]
+                    res =  self.operation(operand_value_map[self.left].value, operand_value_map[self.right].value)
+                    self._is_false_ = not res
+                    if res or self._yield_when_false_:
+                        yield self.get_result_domain(operand_value_map[self.left], operand_value_map[self.right])
+                        # self._cache_.add_edge(first_idx, second_idx, res)
+            # else:
+            #     first_idx = self._node_idx_map_[first_value]
+            #     self._cache_.edge_index_map()
+            #     for _, second_idx, res in self._cache_.out_edges(first_idx):
+            #         second_value = self._cache_.get_node_data(second_idx)
+            #         operand_value_map[order_operand_map['second']] = second_value
+            #         self._is_false_ = not res
+            #         if res or self._yield_when_false_:
+            #             yield self.get_result_domain(operand_value_map[self.left], operand_value_map[self.right])
 
     def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
         satisfied = self.operation(left_value.value, right_value.value)
@@ -1032,20 +1046,20 @@ class LogicalOperator(BinaryOperator, ABC):
     """
 
     seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
-    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
+    right_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
+    left_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
 
     @property
     def _name_(self):
         return self.__class__.__name__
 
-    def update_output_cache(self, right_value, values_for_right_leaves):
-        right_only_values = {k: v for k, v in right_value.values.items() if k in self.right._unique_variables_}
-        values_for_right_leaves.update(right_only_values)
-        self.output_cache[tuple(sorted(values_for_right_leaves.items()))] = self._is_false_
+    def update_right_output_cache(self, output):
+        values_for_right_leaves = {k: v for k, v in output.values.items() if k in self.right._unique_variables_}
+        self.right_output_cache[frozenset(values_for_right_leaves.items())] = self._is_false_
 
     def yield_values_from_cache(self, values_for_right_leaves, left_value):
         _cache_enter_count.update(self._node_.name)
-        for cached_k, output in self.output_cache.items():
+        for cached_k, output in self.right_output_cache.items():
             cached_k_dict = dict(cached_k)
             common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
             _cache_search_count.update(self._node_.name)
@@ -1064,8 +1078,9 @@ class AND(LogicalOperator):
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
+    seen_source_values: SeenSet = field(default_factory=SeenSet, init=False)
     seen_right_values: SeenSet = field(default_factory=SeenSet, init=False)
-    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
+    right_output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
 
     @property
     def _should_cache_output_(self):
@@ -1089,18 +1104,20 @@ class AND(LogicalOperator):
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 output_for_parent = {k: v for k, v in left_value.values.items() if k in parent_var_ids}
-                if self.seen_left_values.check(output_for_parent):
+                if self.seen_parent_values.check(output_for_parent):
                     continue
-                self.seen_left_values.add(output_for_parent)
+                self.seen_parent_values.add(output_for_parent)
                 self._is_false_ = True
                 yield left_value
+                self.update_right_output_cache(left_value)
                 continue
 
             values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            if self.seen_left_values.check(values_for_right_leaves):
+            if self.seen_right_values.check(values_for_right_leaves):
+                yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
                 continue
             else:
-                self.seen_left_values.add(values_for_right_leaves)
+                self.seen_right_values.add(values_for_right_leaves)
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1112,8 +1129,14 @@ class AND(LogicalOperator):
                 if self._yield_when_false_:
                     if self.right._is_false_:
                         self._is_false_ = True
+                        output_for_parent = {k: v for k, v in right_value.values.items() if k in parent_var_ids}
+                        if self.seen_parent_values.check(output_for_parent):
+                            continue
+                        self.seen_parent_values.add(output_for_parent)
                     else:
                         self._is_false_ = False
+                # if self._should_cache_output_:
+                self.update_right_output_cache(right_value)
                 yield right_value
 
 
@@ -1216,7 +1239,7 @@ class XOR(LogicalOperator):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
-    output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
+    right_output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
     seen_left_negative_values_values: SeenSet = field(default_factory=SeenSet, init=False)
 
     def __post_init__(self):
@@ -1234,7 +1257,6 @@ class XOR(LogicalOperator):
         sources = sources or HashedIterable()
         shared_ids = list(map(lambda v: v.value._id_,
                          self.left._unique_variables_.intersection(self.right._unique_variables_)))
-
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
@@ -1255,7 +1277,7 @@ class XOR(LogicalOperator):
                     output = left_value.union(right_value)
                     yield output
                     self._conclusion_.clear()
-                    self.update_output_cache(right_value, values_for_right_leaves)
+                    self.update_right_output_cache(right_value)
             else:
                 self._is_false_ = False
                 self._conclusion_.update(self.left._conclusion_)
