@@ -417,7 +417,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
         with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
             Add(views, Door(handle=handle, body=body))
 
-    # query._render_tree_()
+    query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 4, "Should generate 1 drawer, 1 door and 1 wardrobe."
@@ -462,6 +462,9 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     query._render_tree_()
 
     all_solutions = list(query.evaluate())
+    print(f"\nCache Enter Count = {_cache_enter_count.values}")
+    print(f"\nCache Search Count = {_cache_search_count.values}")
+    print(f"\nCache Match Count = {_cache_match_count.values}")
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
     assert isinstance(all_solutions[0], Door)
     assert all_solutions[0].handle.name == "Handle3"
@@ -473,7 +476,4 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert isinstance(all_solutions[1], Drawer)
     assert all_solutions[1].container.name == "Container1"
     assert all_solutions[1].handle.name == "Handle1"
-    print(f"\nCache Enter Count = {_cache_enter_count.values}")
-    print(f"\nCache Search Count = {_cache_search_count.values}")
-    print(f"\nCache Match Count = {_cache_match_count.values}")
     # print(f"\nCache Match Percent = {_cache_match_count.values/_cache_search_count.values}")

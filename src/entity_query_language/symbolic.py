@@ -105,7 +105,7 @@ class HashedIterable(Generic[T]):
             self.values[value.id_] = value
         return self
 
-    def update(self, iterable: Iterable[HashedValue[T]]):
+    def update(self, iterable: Iterable[Any]):
         for v in iterable:
             self.add(v)
 
@@ -260,8 +260,18 @@ class SymbolicExpression(Generic[T], ABC):
         """
         pass
 
+    def _update_conclusion_(self):
+        pass
+
     def _add_conclusion_(self, conclusion: Conclusion):
         self._conclusion_.add(conclusion)
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        return HashedIterable()
+
+    @property
+    def _conclusions_of_all_descendants_(self) -> List[Conclusion]:
+        return [conc for child in self._descendants_ for conc in child._conclusion_]
 
     @property
     def _parent_(self) -> Optional[SymbolicExpression]:
@@ -449,6 +459,9 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     def evaluate(self) -> Iterable[T]:
         return self._evaluate__()
 
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        return HashedIterable()
+
     def except_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
         """
         Exclude results that match the given conditions.
@@ -593,6 +606,15 @@ class SetOf(QueryObjectDescriptor[T]):
     def _name_(self) -> str:
         return f"SetOf({', '.join(var._name_ for var in self.selected_variables_)})"
 
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        required_vars = HashedIterable()
+        required_vars.update(self.selected_variables_)
+        for var in self.selected_variables_:
+            required_vars.update(var._unique_variables_)
+        for conc in child._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
+
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Dict[HasDomain, Any]]:
         sol_gen = self._evaluate_(self.selected_variables_, sources)
         for sol in sol_gen:
@@ -609,6 +631,14 @@ class Entity(QueryObjectDescriptor[T]):
     @property
     def _name_(self) -> str:
         return f"Entity({self.selected_variable_._name_})"
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        required_vars = HashedIterable()
+        required_vars.add(self.selected_variable_)
+        required_vars.update(self.selected_variable_._unique_variables_)
+        for conc in child._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
         sol_gen = self._evaluate_(self.selected_variable_)
@@ -791,7 +821,12 @@ class Variable(HasDomain):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return [self]
+        variables =  [self]
+        if self._cls_kwargs_:
+            for v in self._cls_kwargs_.values():
+                if isinstance(v, HasDomain):
+                    variables.extend(v._all_variable_instances_)
+        return variables
 
     def __repr__(self):
         return (f"Symbolic({self._type_.__name__}("
@@ -893,30 +928,10 @@ class BinaryOperator(ConstrainingOperator, ABC):
     left: HasDomain
     right: HasDomain
     _child_: SymbolicExpression = field(init=False, default=None)
-    _parent_required_variables__: HashedIterable[Variable] = field(init=False, default_factory=HashedIterable)
 
     def __post_init__(self):
         super().__post_init__()
         self.left, self.right = self._update_children_(self.left, self.right)
-        if isinstance(self.left, BinaryOperator):
-            self.left._parent_required_variables__ = self.right._unique_variables_
-
-    def _add_conclusion_(self, conclusion: Conclusion) -> None:
-        super()._add_conclusion_(conclusion)
-        if isinstance(self.left, BinaryOperator):
-            self.left._parent_required_variables__.update(conclusion._unique_variables_)
-
-    @property
-    @lru_cache(maxsize=None)
-    def _parent_required_variables_(self):
-        if self._parent_ is None or isinstance(self._parent_, ResultQuantifier):
-            return HashedIterable()
-        elif isinstance(self._parent_, QueryObjectDescriptor):
-            vars = HashedIterable()
-            vars.update(self._parent_._unique_variables_)
-            return vars
-        else:
-            return self._parent_required_variables__.union(self._parent_._parent_required_variables_)
 
     @property
     @lru_cache(maxsize=None)
@@ -1045,7 +1060,7 @@ class LogicalOperator(BinaryOperator, ABC):
     A symbolic operation that can be used to combine multiple symbolic expressions.
     """
 
-    seen_parent_values: SeenSet = field(default_factory=SeenSet, init=False)
+    seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()}, init=False)
     right_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
     left_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
 
@@ -1053,23 +1068,44 @@ class LogicalOperator(BinaryOperator, ABC):
     def _name_(self):
         return self.__class__.__name__
 
+    def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
+        required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
+        required_output = {k: v for k, v in output.values.items() if k in required_vars}
+        if self.seen_parent_values[not self._is_false_].check(required_output):
+            return None
+        else:
+            self.seen_parent_values[not self._is_false_].add(required_output)
+            return output
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        if not child:
+            child = self.left
+        required_vars = HashedIterable()
+        if child is self.left:
+            required_vars.update(self.right._unique_variables_)
+        for conc in self._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+        return required_vars
+
     def update_right_output_cache(self, output):
         values_for_right_leaves = {k: v for k, v in output.values.items() if k in self.right._unique_variables_}
         self.right_output_cache[frozenset(values_for_right_leaves.items())] = self._is_false_
 
     def yield_values_from_cache(self, values_for_right_leaves, left_value):
         _cache_enter_count.update(self._node_.name)
-        for cached_k, output in self.right_output_cache.items():
+        for cached_k, is_false in self.right_output_cache.items():
             cached_k_dict = dict(cached_k)
             common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
             _cache_search_count.update(self._node_.name)
             if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
                 continue
             _cache_match_count.update(self._node_.name)
-            self._is_false_ = output
-            cached_output_values = HashedIterable(values=cached_k_dict)
-            output = left_value.union(cached_output_values)
-            yield output
+            self._is_false_ = is_false
+            output = left_value.union(HashedIterable(values=cached_k_dict))
+            output = self.yield_or_skip(output)
+            if output is not None:
+                yield output
 
 
 @dataclass(eq=False)
@@ -1096,28 +1132,24 @@ class AND(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or HashedIterable()
         right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        parent_var_ids = [var.value._id_ for var in self._parent_required_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
-                output_for_parent = {k: v for k, v in left_value.values.items() if k in parent_var_ids}
-                if self.seen_parent_values.check(output_for_parent):
-                    continue
-                self.seen_parent_values.add(output_for_parent)
                 self._is_false_ = True
-                yield left_value
-                self.update_right_output_cache(left_value)
+                output = self.yield_or_skip(left_value)
+                if output is not None:
+                    yield output
                 continue
 
             values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            if self.seen_right_values.check(values_for_right_leaves):
+            if self.seen_left_values.check(values_for_right_leaves):
                 yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
                 continue
             else:
-                self.seen_right_values.add(values_for_right_leaves)
+                self.seen_left_values.add(values_for_right_leaves)
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1129,15 +1161,13 @@ class AND(LogicalOperator):
                 if self._yield_when_false_:
                     if self.right._is_false_:
                         self._is_false_ = True
-                        output_for_parent = {k: v for k, v in right_value.values.items() if k in parent_var_ids}
-                        if self.seen_parent_values.check(output_for_parent):
-                            continue
-                        self.seen_parent_values.add(output_for_parent)
                     else:
                         self._is_false_ = False
-                # if self._should_cache_output_:
-                self.update_right_output_cache(right_value)
-                yield right_value
+                output = self.yield_or_skip(right_value)
+                if output is not None:
+                    # if self._should_cache_output_:
+                    self.update_right_output_cache(right_value)
+                    yield output
 
 
 @dataclass(eq=False)
@@ -1146,6 +1176,12 @@ class OR(LogicalOperator):
     A symbolic OR operation that can be used to combine multiple symbolic expressions.
     """
     seen_values: SeenSet = field(default_factory=SeenSet, init=False)
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        required_vars = self._parent_._required_variables_from_child_(self, when_true)
+        for conc in self._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
@@ -1161,12 +1197,27 @@ class OR(LogicalOperator):
             operand_values = operand._evaluate__(sources)
 
             for operand_value in operand_values:
-                output_for_parent = {k: v for k, v in operand_value.values.items() if k in self._parent_required_variables_}
+                required_vars = self._required_variables_from_child_(operand, when_true=not self._is_false_)
+                output_for_parent = {k: v for k, v in operand_value.values.items() if k in required_vars}
                 if self.seen_values.check(output_for_parent):
                     continue
                 self.seen_values.add(output_for_parent)
                 yield sources.union(operand_value)
 
+
+@dataclass(eq=False)
+class ConclusionSelector(LogicalOperator, ABC):
+
+    def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
+        self._update_conclusion_()
+        required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
+        required_output = {k: v for k, v in output.values.items() if k in required_vars}
+        if self.seen_parent_values[not self._is_false_].check(required_output):
+            self._conclusion_.clear()
+            return None
+        else:
+            self.seen_parent_values[not self._is_false_].add(required_output)
+            return output
 
 def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
     """
@@ -1181,7 +1232,36 @@ def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpre
 
 
 @dataclass(eq=False)
-class ExceptIf(LogicalOperator):
+class ExceptIf(ConclusionSelector):
+
+    def _update_conclusion_(self):
+        if not self.left._is_false_:
+            if self.right._is_false_:
+                self._conclusion_.update(self.left._conclusion_)
+            else:
+                self._conclusion_.update(self.right._conclusion_)
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        if not child:
+            child = self.left
+        required_vars = HashedIterable()
+        when_false = not when_true
+        if child is self.left:
+            if when_true:
+                required_vars.update(self.right._unique_variables_)
+            for conc in self.left._conclusion_.union(self.right._conclusion_):
+                required_vars.update(conc._unique_variables_)
+        elif child is self.right:
+            if when_true:
+                for conc in self.right._conclusion_:
+                    required_vars.update(conc._unique_variables_)
+            if when_false and not self.left._is_false_:
+                for conc in self.left._conclusion_:
+                    required_vars.update(conc._unique_variables_)
+        required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+        for conc in self._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
@@ -1235,7 +1315,7 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
 
 
 @dataclass(eq=False)
-class XOR(LogicalOperator):
+class XOR(ConclusionSelector):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
@@ -1247,6 +1327,34 @@ class XOR(LogicalOperator):
         self.left._yield_when_false_ = True
         for child in self.left._descendants_:
             child._yield_when_false_ = True
+
+    def _update_conclusion_(self):
+        if not self.left._is_false_:
+            self._conclusion_.update(self.left._conclusion_)
+        if self.left._is_false_ and not self._is_false_:
+            self._conclusion_.update(self.right._conclusion_)
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: Optional[bool] = None):
+        if not child:
+            child = self.left
+        required_vars = HashedIterable()
+        when_false = not when_true if when_true is not None else None
+        if child is self.left:
+            if when_false or (when_false is None):
+                required_vars.update(self.right._unique_variables_)
+                required_vars.update(self._parent_._required_variables_from_child_(self, None))
+            else:
+                required_vars.update(self._parent_._required_variables_from_child_(self, True))
+            for conc in self.left._conclusion_:
+                required_vars.update(conc._unique_variables_)
+        elif child is self.right:
+            if when_true or (when_true is None):
+                for conc in self.right._conclusion_:
+                    required_vars.update(conc._unique_variables_)
+            required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+        for conc in self._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
@@ -1274,14 +1382,17 @@ class XOR(LogicalOperator):
                         self._conclusion_.update(self.right._conclusion_)
                     elif not self._yield_when_false_:
                         continue
-                    output = left_value.union(right_value)
-                    yield output
+                    output = self.yield_or_skip(left_value.union(right_value))
+                    if output is not None:
+                        self.update_right_output_cache(right_value)
+                        yield output
                     self._conclusion_.clear()
-                    self.update_right_output_cache(right_value)
             else:
                 self._is_false_ = False
                 self._conclusion_.update(self.left._conclusion_)
-                yield left_value
+                output = self.yield_or_skip(left_value)
+                if output is not None:
+                    yield output
                 self._conclusion_.clear()
 
 
