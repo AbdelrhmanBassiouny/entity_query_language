@@ -1158,15 +1158,11 @@ class AND(LogicalOperator):
             # and yield the (left, right) results found.
             for right_value in right_values:
                 right_value = right_value.union(left_value)
-                if self._yield_when_false_:
-                    if self.right._is_false_:
-                        self._is_false_ = True
-                    else:
-                        self._is_false_ = False
+                self._is_false_ = self.right._is_false_
+                # if self._should_cache_output_:
+                self.update_right_output_cache(right_value)
                 output = self.yield_or_skip(right_value)
                 if output is not None:
-                    # if self._should_cache_output_:
-                    self.update_right_output_cache(right_value)
                     yield output
 
 
