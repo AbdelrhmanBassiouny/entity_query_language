@@ -1,0 +1,49 @@
+from entity_query_language.utils import CacheDict, IndexedCache
+
+
+def test_cache_insert():
+    cache = IndexedCache([1, 2, 3])
+    cache.insert({1: 'a', 2: 'a', 3: 'a'}, '1a2a3a')
+    cache.insert({1: 'a', 2: 'a', 3: 'b'}, '1a2a3b')
+    cache.insert({1: 'a', 2: 'b', 3: 'a'}, '1a2b3a')
+    cache.insert({1: 'a', 2: 'b', 3: 'b'}, '1a2b3b')
+    cache.insert({1: 'b', 2: 'a', 3: 'a'}, '1b2a3a')
+    cache.insert({1: 'b', 2: 'a', 3: 'b'}, '1b2a3b')
+    cache.insert({1: 'b', 2: 'b', 3: 'a'}, '1b2b3a')
+    cache.insert({1: 'b', 2: 'b', 3: 'b'}, '1b2b3b')
+    print(cache.cache)
+    assert cache.cache == CacheDict({(1, 'a'):
+                                         CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1a2a3a',
+                                                                         (3, 'b'): '1a2a3b'}),
+                                                    (2, 'b'): CacheDict({(3, 'a'): '1a2b3a',
+                                                                         (3, 'b'): '1a2b3b'})}),
+                                     (1, 'b'):
+                                         CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1b2a3a',
+                                                                         (3, 'b'): '1b2a3b'}),
+                                                    (2, 'b'): CacheDict({(3, 'a'): '1b2b3a',
+                                                                         (3, 'b'): '1b2b3b'})})
+                                     })
+
+
+def test_cache_retrieve():
+    data = CacheDict({(1, 'a'):
+                          CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1a2a3a',
+                                                          (3, 'b'): '1a2a3b'}),
+                                     (2, 'b'): CacheDict({(3, 'a'): '1a2b3a',
+                                                          (3, 'b'): '1a2b3b'})}),
+                      (1, 'b'):
+                          CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1b2a3a',
+                                                          (3, 'b'): '1b2a3b'}),
+                                     (2, 'b'): CacheDict({(3, 'a'): '1b2b3a',
+                                                          (3, 'b'): '1b2b3b'})})
+                      })
+    assignment = {2: 'a'}
+    cache = IndexedCache([1, 2, 3])
+    result = list(cache.retrieve(assignment, data))
+    patters = [r[0] for r in result]
+    output_vals = [r[1] for r in result]
+    assert len(result) == 4, "Should generate 4 results"
+    assert output_vals == ['1a2a3a', '1a2a3b', '1b2a3a', '1b2a3b']
+    assert patters == [{1: 'a', 2: 'a', 3: 'a'}, {1: 'a', 2: 'a', 3: 'b'},
+                       {1: 'b', 2: 'a', 3: 'a'}, {1: 'b', 2: 'a', 3: 'b'}]
+    print(result)

@@ -4,11 +4,13 @@ import codecs
 import itertools
 import os
 import re
-from collections import defaultdict
+from collections import defaultdict, UserDict
+from copy import copy
 from dataclasses import dataclass, field
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
-from typing import Iterable
+from typing import Iterable, FrozenSet, Tuple, Dict, DefaultDict, Hashable, Generic, Optional, Any
+
 
 try:
     import six
@@ -21,7 +23,7 @@ except ImportError:
     Source = None
 
 from anytree import Node, RenderTree, PreOrderIter
-from typing_extensions import Callable, Set, Any, Optional, List
+from typing_extensions import Callable, Set, Any, Optional, List, TypeVar
 
 from . import logger
 
@@ -58,7 +60,7 @@ class SeenSet:
         Missing keys are implicitly wildcards.
         Example: {"k1": "v1"} means all k2,... are allowed
         """
-        self.seen.append(dict(assignment))
+        self.seen.append(assignment)
 
     def check(self, assignment):
         """
@@ -70,23 +72,195 @@ class SeenSet:
         return False
 
 
-class SeenSetWithPatterns:
-    def __init__(self):
-        self.seen = []
-        self.pattern_cache = defaultdict(list)  # key → dict of patterns
+T = TypeVar("T")
 
-    def add(self, assignment, outputs: Iterable):
-        d = dict(assignment)
-        self.seen.append(d)
-        pattern = tuple(sorted(d.items()))
-        self.pattern_cache[pattern].extend(outputs)
+@dataclass
+class HashedValue(Generic[T]):
+    value: T
+    id_: Optional[int] = field(default=None)
 
-    def retrieve(self, assignment) -> Optional[List]:
-        for pattern, values in self.pattern_cache.items():
-            proj = tuple(sorted((k, assignment.get(k)) for k, _ in pattern))
-            if proj in self.pattern_cache:
-                return self.pattern_cache[proj]
-        return None
+    def __post_init__(self):
+        if self.id_ is None:
+            if hasattr(self.value, "_id_"):
+                self.id_ = self.value._id_
+            else:
+                self.id_ = id(self.value)
+
+    def __hash__(self):
+        return hash(self.id_)
+
+    def __eq__(self, other):
+        return self.id_ == other.id_
+
+
+@dataclass
+class HashedIterable(Generic[T]):
+    """
+    A wrapper for an iterable that hashes its items.
+    This is useful for ensuring that the items in the iterable are unique and can be used as keys in a dictionary.
+    """
+    iterable: Iterable[HashedValue[T]] = field(default_factory=list)
+    values: Dict[int, HashedValue[T]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.iterable and not isinstance(self.iterable, HashedIterable):
+            self.iterable = (HashedValue(id_=k, value=v) if not isinstance(v, HashedValue) else v
+                             for k, v in enumerate(self.iterable))
+
+    def get(self, key: int, default: Any) -> HashedValue[T]:
+        return self.values.get(key, default)
+
+    def add(self, value: Any):
+        if not isinstance(value, HashedValue):
+            value = HashedValue(value)
+        if value.id_ not in self.values:
+            self.values[value.id_] = value
+        return self
+
+    def update(self, iterable: Iterable[Any]):
+        for v in iterable:
+            self.add(v)
+
+    def __iter__(self):
+        """
+        Iterate over the hashed values.
+
+        :return: An iterator over the hashed values.
+        """
+        yield from self.values.values()
+        for v in self.iterable:
+            self.values[v.id_] = v
+            yield v
+
+    def __or__(self, other) -> HashedIterable[T]:
+        return self.union(other)
+
+    def __and__(self, other) -> HashedIterable[T]:
+        return self.intersection(other)
+
+    def intersection(self, other):
+        common_keys = self.values.keys() & other.values.keys()
+        common_values = {k: self.values[k] for k in common_keys}
+        return HashedIterable(values=common_values)
+
+    def difference(self, other):
+        common_keys = self.values.keys() & other.values.keys()
+        left_keys = self.values.keys() - other.values.keys()
+        values = {k: self.values[k] for k in left_keys}
+        return HashedIterable(values=values)
+
+    def union(self, other):
+        if not isinstance(other, HashedIterable):
+            other = HashedIterable(values={HashedValue(v).id_: HashedValue(v) for v in make_list(other)})
+        all_keys = self.values.keys() | other.values.keys()
+        all_values = {k: self.values.get(k, other.values.get(k)) for k in all_keys}
+        return HashedIterable(values=all_values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __getitem__(self, id_: int) -> HashedValue:
+        """
+        Get the HashedValue by its id.
+
+        :param id_: The id of the HashedValue to get.
+        :return: The HashedValue with the given id.
+        """
+        return self.values[id_]
+
+    def __setitem__(self, id_: int, value: HashedValue[T]):
+        """
+        Set the HashedValue by its id.
+
+        :param id_: The id of the HashedValue to set.
+        :param value: The HashedValue to set.
+        """
+        self.values[id_] = value
+
+    def __copy__(self):
+        """
+        Create a shallow copy of the HashedIterable.
+
+        :return: A new HashedIterable instance with the same values.
+        """
+        return HashedIterable(values=self.values.copy())
+
+    def __contains__(self, item):
+        return item in self.values
+
+    def __hash__(self):
+        return hash(tuple(sorted(self.values.keys())))
+
+    def __eq__(self, other):
+        keys_are_equal = self.values.keys() == other.values.keys()
+        if not keys_are_equal:
+            return False
+        values_are_equal = all(my_v == other_v for my_v, other_v in zip(self.values.values(), other.values.values()))
+        return values_are_equal
+
+    def __bool__(self):
+        return bool(self.values) or bool(self.iterable)
+
+
+ALL = HashedValue(object())
+
+class CacheDict(UserDict):
+    ...
+
+@dataclass
+class IndexedCache:
+    keys: List[int] = field(default_factory=list)
+    seen_set: SeenSet = field(default_factory=SeenSet, init=False)
+    cache: CacheDict = field(default_factory=CacheDict, init=False)
+    enter_count: int = field(default=0, init=False)
+    search_count: int = field(default=0, init=False)
+    found_count: int = field(default=0, init=False)
+
+    def __post_init__(self):
+        self.keys.sort()
+
+    def insert(self, assignment: Dict, output: Any):
+        assignment = dict(assignment)
+        cache = self.cache
+        for k_idx, k in enumerate(self.keys):
+            if k not in assignment.keys():
+                raise ValueError(f"Missing key {k} in assignment {assignment}")
+            if k_idx < len(self.keys) - 1:
+                if (k, assignment[k]) not in cache:
+                    cache[(k, assignment[k])] = CacheDict()
+                cache = cache[(k, assignment[k])]
+            else:
+                cache[(k, assignment[k])] = output
+        self.seen_set.add(assignment)
+
+    def check(self, assignment: Dict) -> bool:
+        """
+        Check if seen entries cover an assignment (dict).
+
+        :param assignment: The assignment to check.
+        """
+        return self.seen_set.check(assignment)
+
+    def retrieve(self, assignment, cache = None, key_idx = 0, result: Dict = None) -> Iterable:
+        result = result or copy(assignment)
+        if cache is None:
+            cache = self.cache
+        self.enter_count += 1
+        key = self.keys[key_idx]
+        while key in assignment:
+            cache = cache[(key, assignment[key])]
+            if key_idx+1 < len(self.keys):
+                key = self.keys[key_idx+1]
+        if key not in assignment:
+            for cache_key, cache_val in cache.items():
+                result = copy(result)
+                result[key] = cache_key[1]
+                if isinstance(cache_val, CacheDict):
+                    yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
+                else:
+                    yield result, cache_val
+        else:
+            yield result, cache
 
 
 def filter_data(data, selected_indices):

@@ -4,18 +4,21 @@ import contextvars
 import operator
 import typing
 from abc import abstractmethod, ABC
-from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import FrozenSet
 
-import rustworkx
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
 from typing_extensions import dataclass_transform, List, Tuple, Callable
 
+from .cache_data import _cache_enter_count, _cache_search_count, _cache_match_count, _cache_lookup_time, \
+    _cache_update_time, is_caching_enabled
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
-from .utils import make_list, IDGenerator, SeenSet, is_iterable, render_tree
+from .utils import make_list, IDGenerator, SeenSet, IndexedCache, is_iterable, render_tree, HashedValue, \
+    HashedIterable
+import time
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
 
@@ -61,149 +64,7 @@ def symbol(cls):
 
 T = TypeVar("T")
 
-
-@dataclass
-class HashedValue(Generic[T]):
-    value: T
-    id_: Optional[int] = field(default=None)
-
-    def __post_init__(self):
-        if self.id_ is None:
-            if hasattr(self.value, "_id_"):
-                self.id_ = self.value._id_
-            else:
-                self.id_ = id(self.value)
-
-    def __hash__(self):
-        return hash(self.id_)
-
-    def __eq__(self, other):
-        return self.id_ == other.id_
-
-
-@dataclass
-class HashedIterable(Generic[T]):
-    """
-    A wrapper for an iterable that hashes its items.
-    This is useful for ensuring that the items in the iterable are unique and can be used as keys in a dictionary.
-    """
-    iterable: Iterable[HashedValue[T]] = field(default_factory=list)
-    values: Dict[int, HashedValue[T]] = field(default_factory=dict)
-
-    def __post_init__(self):
-        if self.iterable and not isinstance(self.iterable, HashedIterable):
-            self.iterable = (HashedValue(id_=k, value=v) if not isinstance(v, HashedValue) else v
-                             for k, v in enumerate(self.iterable))
-
-    def get(self, key: int, default: Any) -> HashedValue[T]:
-        return self.values.get(key, default)
-
-    def add(self, value: Any):
-        if not isinstance(value, HashedValue):
-            value = HashedValue(value)
-        if value.id_ not in self.values:
-            self.values[value.id_] = value
-        return self
-
-    def update(self, iterable: Iterable[Any]):
-        for v in iterable:
-            self.add(v)
-
-    def __iter__(self):
-        """
-        Iterate over the hashed values.
-
-        :return: An iterator over the hashed values.
-        """
-        yield from self.values.values()
-        for v in self.iterable:
-            self.values[v.id_] = v
-            yield v
-
-    def __or__(self, other) -> HashedIterable[T]:
-        return self.union(other)
-
-    def __and__(self, other) -> HashedIterable[T]:
-        return self.intersection(other)
-
-    def intersection(self, other):
-        common_keys = self.values.keys() & other.values.keys()
-        common_values = {k: self.values[k] for k in common_keys}
-        return HashedIterable(values=common_values)
-
-    def difference(self, other):
-        common_keys = self.values.keys() & other.values.keys()
-        left_keys = self.values.keys() - other.values.keys()
-        values = {k: self.values[k] for k in left_keys}
-        return HashedIterable(values=values)
-
-    def union(self, other):
-        if not isinstance(other, HashedIterable):
-            other = HashedIterable(values={HashedValue(v).id_: HashedValue(v) for v in make_list(other)})
-        all_keys = self.values.keys() | other.values.keys()
-        all_values = {k: self.values.get(k, other.values.get(k)) for k in all_keys}
-        return HashedIterable(values=all_values)
-
-    def __len__(self) -> int:
-        return len(self.values)
-
-    def __getitem__(self, id_: int) -> HashedValue:
-        """
-        Get the HashedValue by its id.
-
-        :param id_: The id of the HashedValue to get.
-        :return: The HashedValue with the given id.
-        """
-        return self.values[id_]
-
-    def __setitem__(self, id_: int, value: HashedValue[T]):
-        """
-        Set the HashedValue by its id.
-
-        :param id_: The id of the HashedValue to set.
-        :param value: The HashedValue to set.
-        """
-        self.values[id_] = value
-
-    def __copy__(self):
-        """
-        Create a shallow copy of the HashedIterable.
-
-        :return: A new HashedIterable instance with the same values.
-        """
-        return HashedIterable(values=self.values.copy())
-
-    def __contains__(self, item):
-        return item in self.values
-
-    def __hash__(self):
-        return hash(tuple(sorted(self.values.keys())))
-
-    def __eq__(self, other):
-        keys_are_equal = self.values.keys() == other.values.keys()
-        if not keys_are_equal:
-            return False
-        values_are_equal = all(my_v == other_v for my_v, other_v in zip(self.values.values(), other.values.values()))
-        return values_are_equal
-
-    def __bool__(self):
-        return bool(self.values) or bool(self.iterable)
-
-
 id_generator = IDGenerator()
-
-
-@dataclass
-class CacheCount:
-    values: Dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
-
-    def update(self, name: str):
-        self.values[name] += 1
-
-
-_cache_enter_count = CacheCount()
-_cache_search_count = CacheCount()
-_cache_match_count = CacheCount()
 
 
 @dataclass(eq=False)
@@ -952,9 +813,7 @@ class Comparator(BinaryOperator):
     right: HasDomain
     operation: Callable[[Any, Any], bool]
     _invert__: bool = field(init=False, default=False)
-    _cache_: rustworkx.PyGraph[HashedValue] = field(init=False,
-                                                    default_factory=lambda: rustworkx.PyGraph(multigraph=False))
-    _node_idx_map_: Dict[HashedValue, int] = field(init=False, default_factory=dict)
+    _cache_: IndexedCache = field(default_factory=IndexedCache, init=False)
 
     @property
     def _invert_(self):
@@ -991,7 +850,7 @@ class Comparator(BinaryOperator):
     def _name_(self):
         return self.operation.__name__
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
         Compares the left and right symbolic variables using the "operation".
 
@@ -1005,53 +864,54 @@ class Comparator(BinaryOperator):
         """
         sources = sources or HashedIterable()
 
+        variables_sources = {k: v for k, v in sources.values.items() if k in self._unique_variables_}
+        cache_key = self.get_cache_key(variables_sources)
+        if cache_key is not None:
+            for values, is_false in self._cache_.pattern_cache[cache_key]:
+                self._is_false_ = is_false
+                yield values
+            return
 
-        if self.left._parent_variable_._id_ in sources:
-            order_operand_map = {'first': self.left, 'second': self.right}
-        else:
+        if self.right._parent_variable_._id_ in sources:
             order_operand_map = {'first': self.right, 'second': self.left}
+        else:
+            order_operand_map = {'first': self.left, 'second': self.right}
 
         first_values = order_operand_map['first']._evaluate__(sources)
         for first_value in first_values:
             operand_value_map = {order_operand_map['first']: first_value}
-            if first_value not in self._cache_.nodes():
-                # first_idx = self._cache_.add_node(first_value)
-                # self._node_idx_map_[first_value] = first_idx
-                second_values = order_operand_map['second']._evaluate__(sources)
-                for second_value in second_values:
-                    operand_value_map[order_operand_map['second']] = second_value
-                    # if second_value not in self._cache_.nodes():
-                        # second_idx = self._cache_.add_node(second_value)
-                        # self._node_idx_map_[first_value] = first_idx
-                    # else:
-                    #     second_idx = self._node_idx_map_[second_value]
-                    res =  self.operation(operand_value_map[self.left].value, operand_value_map[self.right].value)
-                    self._is_false_ = not res
-                    if res or self._yield_when_false_:
-                        yield self.get_result_domain(operand_value_map[self.left], operand_value_map[self.right])
-                        # self._cache_.add_edge(first_idx, second_idx, res)
-            # else:
-            #     first_idx = self._node_idx_map_[first_value]
-            #     self._cache_.edge_index_map()
-            #     for _, second_idx, res in self._cache_.out_edges(first_idx):
-            #         second_value = self._cache_.get_node_data(second_idx)
-            #         operand_value_map[order_operand_map['second']] = second_value
-            #         self._is_false_ = not res
-            #         if res or self._yield_when_false_:
-            #             yield self.get_result_domain(operand_value_map[self.left], operand_value_map[self.right])
+            if not variables_sources.get(order_operand_map['first']._parent_variable_._id_, None):
+                variables_sources = {order_operand_map['first']._parent_variable_._id_: first_value}
+            second_values = order_operand_map['second']._evaluate__(sources)
+            for second_value in second_values:
+                operand_value_map[order_operand_map['second']] = second_value
+                res =  self.operation(operand_value_map[self.left].value, operand_value_map[self.right].value)
+                self._is_false_ = not res
+                if res or self._yield_when_false_:
+                    values = self.get_result_domain(operand_value_map)
+                    self.update_cache(variables_sources, values)
+                    yield values
 
-    def check(self, left_value: HashedValue, right_value: HashedValue) -> Optional[HashedIterable]:
-        satisfied = self.operation(left_value.value, right_value.value)
-        if satisfied:
-            return self.get_result_domain(left_value, right_value)
-        else:
-            return None
-
-    def get_result_domain(self, left_value: HashedValue, right_value: HashedValue) -> HashedIterable:
-        left_leaf_value = self.left._parent_variable_._domain_[left_value.id_]
-        right_leaf_value = self.right._parent_variable_._domain_[right_value.id_]
+    def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
+        left_leaf_value = self.left._parent_variable_._domain_[operand_value_map[self.left].id_]
+        right_leaf_value = self.right._parent_variable_._domain_[operand_value_map[self.right].id_]
         return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value,
                                       self.right._parent_variable_._id_: right_leaf_value})
+
+    def update_cache(self, sources: Dict, values: HashedIterable):
+        if not is_caching_enabled():
+            return
+        if not sources:
+            return
+        self._cache_.add(sources, outputs=[(values, self._is_false_)])
+
+    def get_cache_key(self, sources: Dict) -> Optional[FrozenSet]:
+        if not is_caching_enabled():
+            return None
+        if not sources:
+            return None
+        cache_key = self._cache_.get_matching_pattern(sources)
+        return cache_key
 
 
 @dataclass(eq=False)
@@ -1061,7 +921,7 @@ class LogicalOperator(BinaryOperator, ABC):
     """
 
     seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()}, init=False)
-    right_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
+    right_output_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
     left_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
 
     @property
@@ -1070,6 +930,9 @@ class LogicalOperator(BinaryOperator, ABC):
 
     def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
         required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
+        # If the parent requires no variables, there's nothing to deduplicate on.
+        if not required_vars.values:
+            return output
         required_output = {k: v for k, v in output.values.items() if k in required_vars}
         if self.seen_parent_values[not self._is_false_].check(required_output):
             return None
@@ -1089,17 +952,21 @@ class LogicalOperator(BinaryOperator, ABC):
         return required_vars
 
     def update_right_output_cache(self, output):
+        if not is_caching_enabled():
+            return
         values_for_right_leaves = {k: v for k, v in output.values.items() if k in self.right._unique_variables_}
-        self.right_output_cache[frozenset(values_for_right_leaves.items())] = self._is_false_
+        # Store the compact right-leaf assignment and the resulting is_false flag
+        t0 = time.perf_counter()
+        self.right_output_cache.add(values_for_right_leaves, outputs=[(dict(values_for_right_leaves), self._is_false_)])
+        _cache_update_time.add(self._node_.name, time.perf_counter() - t0)
 
     def yield_values_from_cache(self, values_for_right_leaves, left_value):
         _cache_enter_count.update(self._node_.name)
-        for cached_k, is_false in self.right_output_cache.items():
-            cached_k_dict = dict(cached_k)
-            common_ids = values_for_right_leaves.keys() & cached_k_dict.keys()
-            _cache_search_count.update(self._node_.name)
-            if any(values_for_right_leaves[id_] != cached_k_dict[id_] for id_ in common_ids):
-                continue
+        t0 = time.perf_counter()
+        cached = self.right_output_cache.retrieve(values_for_right_leaves) or []
+        _cache_lookup_time.add(self._node_.name, time.perf_counter() - t0)
+        _cache_search_count.values[self._node_.name] = self.right_output_cache.search_count
+        for cached_k_dict, is_false in cached:
             _cache_match_count.update(self._node_.name)
             self._is_false_ = is_false
             output = left_value.union(HashedIterable(values=cached_k_dict))
@@ -1116,7 +983,6 @@ class AND(LogicalOperator):
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
     seen_source_values: SeenSet = field(default_factory=SeenSet, init=False)
     seen_right_values: SeenSet = field(default_factory=SeenSet, init=False)
-    right_output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
 
     @property
     def _should_cache_output_(self):
@@ -1145,11 +1011,12 @@ class AND(LogicalOperator):
                 continue
 
             values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            if self.seen_left_values.check(values_for_right_leaves):
+            if is_caching_enabled() and self.seen_left_values.check(values_for_right_leaves):
                 yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
                 continue
             else:
-                self.seen_left_values.add(values_for_right_leaves)
+                if is_caching_enabled():
+                    self.seen_left_values.add(values_for_right_leaves)
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1159,8 +1026,8 @@ class AND(LogicalOperator):
             for right_value in right_values:
                 right_value = right_value.union(left_value)
                 self._is_false_ = self.right._is_false_
-                # if self._should_cache_output_:
-                self.update_right_output_cache(right_value)
+                if is_caching_enabled():
+                    self.update_right_output_cache(right_value)
                 output = self.yield_or_skip(right_value)
                 if output is not None:
                     yield output
@@ -1195,6 +1062,10 @@ class OR(LogicalOperator):
             for operand_value in operand_values:
                 required_vars = self._required_variables_from_child_(operand, when_true=not self._is_false_)
                 output_for_parent = {k: v for k, v in operand_value.values.items() if k in required_vars}
+                if not output_for_parent:
+                    # No required vars to deduplicate by; yield directly.
+                    yield sources.union(operand_value)
+                    continue
                 if self.seen_values.check(output_for_parent):
                     continue
                 self.seen_values.add(output_for_parent)
@@ -1207,6 +1078,9 @@ class ConclusionSelector(LogicalOperator, ABC):
     def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
         self._update_conclusion_()
         required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
+        # If no variables are required by the parent, always yield and don't record in seen sets.
+        if not required_vars.values:
+            return output
         required_output = {k: v for k, v in output.values.items() if k in required_vars}
         if self.seen_parent_values[not self._is_false_].check(required_output):
             self._conclusion_.clear()
@@ -1315,7 +1189,7 @@ class XOR(ConclusionSelector):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
-    right_output_cache: Dict[Tuple, bool] = field(default_factory=dict, init=False)
+    right_output_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
     seen_left_negative_values_values: SeenSet = field(default_factory=SeenSet, init=False)
 
     def __post_init__(self):
@@ -1367,10 +1241,11 @@ class XOR(ConclusionSelector):
             left_value = left_value.union(sources)
             if self.left._is_false_:
                 values_for_right_leaves = {k: left_value[k] for k in shared_ids if k in left_value}
-                if self.seen_left_negative_values_values.check(values_for_right_leaves):
+                if is_caching_enabled() and self.seen_left_negative_values_values.check(values_for_right_leaves):
                     yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
                     continue
-                self.seen_left_negative_values_values.add(values_for_right_leaves)
+                if is_caching_enabled():
+                    self.seen_left_negative_values_values.add(values_for_right_leaves)
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:
                     self._is_false_ = self.right._is_false_
@@ -1380,7 +1255,8 @@ class XOR(ConclusionSelector):
                         continue
                     output = self.yield_or_skip(left_value.union(right_value))
                     if output is not None:
-                        self.update_right_output_cache(right_value)
+                        if is_caching_enabled():
+                            self.update_right_output_cache(right_value)
                         yield output
                     self._conclusion_.clear()
             else:
