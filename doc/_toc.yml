@@ -4,11 +4,11 @@
 format: jb-book
 root: intro
 chapters:
-- file: sql_for_sql_experts
 - file: example_with_the
 - file: example_with_and_or
 - file: example_with_not
 - file: example_with_joining_multiple_sources
 - file: example_with_inference
+- file: eql_for_sql_experts
 - file: bibliography
 - file: autoapi/index
