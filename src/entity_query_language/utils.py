@@ -241,7 +241,7 @@ class IndexedCache:
         """
         return self.seen_set.check(assignment)
 
-    def retrieve(self, assignment, cache = None, key_idx = 0, result: Dict = None) -> Iterable:
+    def retrieve(self, assignment, cache=None, key_idx=0, result: Dict = None) -> Iterable:
         result = result or copy(assignment)
         if cache is None:
             cache = self.cache
@@ -250,7 +250,10 @@ class IndexedCache:
         while key in assignment:
             cache = cache[(key, assignment[key])]
             if key_idx+1 < len(self.keys):
-                key = self.keys[key_idx+1]
+                key_idx = key_idx + 1
+                key = self.keys[key_idx]
+            else:
+                break
         if key not in assignment:
             for cache_key, cache_val in cache.items():
                 result = copy(result)

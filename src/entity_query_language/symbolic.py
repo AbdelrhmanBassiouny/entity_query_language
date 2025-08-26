@@ -815,6 +815,10 @@ class Comparator(BinaryOperator):
     _invert__: bool = field(init=False, default=False)
     _cache_: IndexedCache = field(default_factory=IndexedCache, init=False)
 
+    def __post_init__(self):
+        super().__post_init__()
+        self._cache_.keys = [self.left._parent_variable_._id_, self.right._parent_variable_._id_]
+
     @property
     def _invert_(self):
         return self._invert__
@@ -865,11 +869,10 @@ class Comparator(BinaryOperator):
         sources = sources or HashedIterable()
 
         variables_sources = {k: v for k, v in sources.values.items() if k in self._unique_variables_}
-        cache_key = self.get_cache_key(variables_sources)
-        if cache_key is not None:
-            for values, is_false in self._cache_.pattern_cache[cache_key]:
+        if is_caching_enabled() and self._cache_.check(variables_sources):
+            for values, is_false in self._cache_.retrieve(variables_sources):
                 self._is_false_ = is_false
-                yield values
+                yield HashedIterable(values=values)
             return
 
         if self.right._parent_variable_._id_ in sources:
@@ -889,7 +892,7 @@ class Comparator(BinaryOperator):
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
                     values = self.get_result_domain(operand_value_map)
-                    self.update_cache(variables_sources, values)
+                    self.update_cache(values)
                     yield values
 
     def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
@@ -898,20 +901,10 @@ class Comparator(BinaryOperator):
         return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value,
                                       self.right._parent_variable_._id_: right_leaf_value})
 
-    def update_cache(self, sources: Dict, values: HashedIterable):
+    def update_cache(self, values: HashedIterable):
         if not is_caching_enabled():
             return
-        if not sources:
-            return
-        self._cache_.add(sources, outputs=[(values, self._is_false_)])
-
-    def get_cache_key(self, sources: Dict) -> Optional[FrozenSet]:
-        if not is_caching_enabled():
-            return None
-        if not sources:
-            return None
-        cache_key = self._cache_.get_matching_pattern(sources)
-        return cache_key
+        self._cache_.insert(values.values, output=self._is_false_)
 
 
 @dataclass(eq=False)
@@ -1005,7 +998,8 @@ class AND(LogicalOperator):
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
-                output = self.yield_or_skip(left_value)
+                # output = self.yield_or_skip(left_value)
+                output = left_value
                 if output is not None:
                     yield output
                 continue
@@ -1028,7 +1022,8 @@ class AND(LogicalOperator):
                 self._is_false_ = self.right._is_false_
                 if is_caching_enabled():
                     self.update_right_output_cache(right_value)
-                output = self.yield_or_skip(right_value)
+                # output = self.yield_or_skip(right_value)
+                output = right_value
                 if output is not None:
                     yield output
 
@@ -1262,7 +1257,8 @@ class XOR(ConclusionSelector):
             else:
                 self._is_false_ = False
                 self._conclusion_.update(self.left._conclusion_)
-                output = self.yield_or_skip(left_value)
+                # output = self.yield_or_skip(left_value)
+                output = left_value
                 if output is not None:
                     yield output
                 self._conclusion_.clear()
