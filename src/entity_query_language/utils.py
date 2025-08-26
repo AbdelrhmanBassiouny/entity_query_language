@@ -202,10 +202,21 @@ class HashedIterable(Generic[T]):
         return bool(self.values) or bool(self.iterable)
 
 
-ALL = HashedValue(object())
+@dataclass(eq=False)
+class ALL(HashedValue):
+    def __eq__(self, other):
+        return True
+
+    def __hash__(self):
+        return hash(id(self))
+
+
+All = ALL(object())
+
 
 class CacheDict(UserDict):
     ...
+
 
 @dataclass
 class IndexedCache:
