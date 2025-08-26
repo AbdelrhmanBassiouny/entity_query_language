@@ -868,32 +868,39 @@ class Comparator(BinaryOperator):
         """
         sources = sources or HashedIterable()
 
-        variables_sources = {k: v for k, v in sources.values.items() if k in self._unique_variables_}
-        if is_caching_enabled() and self._cache_.check(variables_sources):
-            for values, is_false in self._cache_.retrieve(variables_sources):
-                self._is_false_ = is_false
-                yield HashedIterable(values=values)
-            return
+        if is_caching_enabled():
+            if self._cache_.check(sources.values):
+                yield from self.yield_from_cache(sources.values)
+                return
 
-        if self.right._parent_variable_._id_ in sources:
-            order_operand_map = {'first': self.right, 'second': self.left}
-        else:
-            order_operand_map = {'first': self.left, 'second': self.right}
+        order_operand_map = self.get_operand_order_map(sources)
 
         first_values = order_operand_map['first']._evaluate__(sources)
         for first_value in first_values:
             operand_value_map = {order_operand_map['first']: first_value}
-            if not variables_sources.get(order_operand_map['first']._parent_variable_._id_, None):
-                variables_sources = {order_operand_map['first']._parent_variable_._id_: first_value}
             second_values = order_operand_map['second']._evaluate__(sources)
             for second_value in second_values:
                 operand_value_map[order_operand_map['second']] = second_value
-                res =  self.operation(operand_value_map[self.left].value, operand_value_map[self.right].value)
+                res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
                     values = self.get_result_domain(operand_value_map)
                     self.update_cache(values)
                     yield values
+
+    def apply_operation(self, operand_values: Dict[HasDomain, HashedValue]):
+        return self.operation(operand_values[self.left].value, operand_values[self.right].value)
+
+    def get_operand_order_map(self, sources: HashedIterable):
+        if self.right._parent_variable_._id_ in sources:
+            return {'first': self.right, 'second': self.left}
+        else:
+            return {'first': self.left, 'second': self.right}
+
+    def yield_from_cache(self, variables_sources):
+        for values, is_false in self._cache_.retrieve(variables_sources):
+            self._is_false_ = is_false
+            yield HashedIterable(values=values)
 
     def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
         left_leaf_value = self.left._parent_variable_._domain_[operand_value_map[self.left].id_]
