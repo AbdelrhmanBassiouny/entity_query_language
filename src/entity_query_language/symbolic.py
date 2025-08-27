@@ -802,7 +802,7 @@ class BinaryOperator(ConstrainingOperator, ABC):
             self._is_false_ = is_false
             _cache_enter_count.values[self._node_.name] = cache.enter_count
             _cache_search_count.values[self._node_.name] = cache.search_count
-            _cache_match_count.values[self._node_.name] = cache.found_count
+            _cache_match_count.values[self._node_.name] += 1
             yield HashedIterable(values=values)
 
     def update_cache(self, values: HashedIterable, cache: Optional[IndexedCache] = None):

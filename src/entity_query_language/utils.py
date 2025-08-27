@@ -234,7 +234,6 @@ class IndexedCache:
     cache: CacheDict = field(default_factory=CacheDict, init=False)
     enter_count: int = field(default=0, init=False)
     search_count: int = field(default=0, init=False)
-    found_count: int = field(default=0, init=False)
 
     def __post_init__(self):
         self.keys.sort()
@@ -282,6 +281,7 @@ class IndexedCache:
                 cache = cache[(key, assignment[key])]
             except KeyError:
                 for cache_key, cache_val in cache.items():
+                    self.search_count += 1
                     if isinstance(cache_key[1], ALL):
                         if isinstance(cache_val, CacheDict):
                             yield from self.retrieve(assignment, cache_val, key_idx + 1, copy(result))
@@ -301,7 +301,6 @@ class IndexedCache:
                 if isinstance(cache_val, CacheDict):
                     yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
                 else:
-                    self.found_count += 1
                     yield result, cache_val
         else:
             yield result, cache
