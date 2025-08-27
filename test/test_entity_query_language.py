@@ -11,7 +11,7 @@ from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnect
     View, World, Wardrobe
 
 
-disable_caching()
+# disable_caching()
 
 
 def test_generate_with_using_attribute_and_callables(handles_and_containers_world):

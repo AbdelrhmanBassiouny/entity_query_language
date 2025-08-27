@@ -50,9 +50,22 @@ class IDGenerator:
         return self._counter
 
 
+@dataclass(eq=False)
+class ALL:
+    def __eq__(self, other):
+        return True
+
+    def __hash__(self):
+        return hash(id(self))
+
+
+All = ALL()
+
+
 @dataclass
 class SeenSet:
     seen: List[Any] = field(default_factory=list, init=False)
+    all_seen: bool = field(default=False, init=False)
 
     def add(self, assignment):
         """
@@ -60,12 +73,17 @@ class SeenSet:
         Missing keys are implicitly wildcards.
         Example: {"k1": "v1"} means all k2,... are allowed
         """
-        self.seen.append(assignment)
+        if not self.all_seen:
+            self.seen.append(assignment)
+            if not assignment:
+                self.all_seen = True
 
     def check(self, assignment):
         """
         Check if an assignment (dict) is covered by seen entries.
         """
+        if self.all_seen:
+            return True
         for constraint in self.seen:
             if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
                 return True
@@ -73,6 +91,7 @@ class SeenSet:
 
 
 T = TypeVar("T")
+
 
 @dataclass
 class HashedValue(Generic[T]):
@@ -90,6 +109,8 @@ class HashedValue(Generic[T]):
         return hash(self.id_)
 
     def __eq__(self, other):
+        if isinstance(other, ALL):
+            return True
         return self.id_ == other.id_
 
 
@@ -202,18 +223,6 @@ class HashedIterable(Generic[T]):
         return bool(self.values) or bool(self.iterable)
 
 
-@dataclass(eq=False)
-class ALL(HashedValue):
-    def __eq__(self, other):
-        return True
-
-    def __hash__(self):
-        return hash(id(self))
-
-
-All = ALL(object())
-
-
 class CacheDict(UserDict):
     ...
 
@@ -235,14 +244,14 @@ class IndexedCache:
         cache = self.cache
         for k_idx, k in enumerate(self.keys):
             if k not in assignment.keys():
-                raise ValueError(f"Missing key {k} in assignment {assignment}")
+                assignment[k] = All
+                logger.debug(f"Missing key {k} in assignment {assignment}, using {All}")
             if k_idx < len(self.keys) - 1:
                 if (k, assignment[k]) not in cache:
                     cache[(k, assignment[k])] = CacheDict()
                 cache = cache[(k, assignment[k])]
             else:
                 cache[(k, assignment[k])] = output
-        self.seen_set.add(assignment)
 
     def check(self, assignment: Dict) -> bool:
         """
@@ -250,16 +259,35 @@ class IndexedCache:
 
         :param assignment: The assignment to check.
         """
-        return self.seen_set.check(assignment)
+        assignment = {k: v for k, v in assignment.items() if k in self.keys}
+        seen = self.seen_set.check(assignment)
+        if not seen:
+            self.seen_set.add(assignment)
+        return seen
 
     def retrieve(self, assignment, cache=None, key_idx=0, result: Dict = None) -> Iterable:
         result = result or copy(assignment)
         if cache is None:
             cache = self.cache
-        self.enter_count += 1
-        key = self.keys[key_idx]
+            self.enter_count += 1
+        if isinstance(cache, CacheDict) and len(cache) == 0:
+            return
+        self.search_count += 1
+        try:
+            key = self.keys[key_idx]
+        except IndexError:
+            return
         while key in assignment:
-            cache = cache[(key, assignment[key])]
+            try:
+                cache = cache[(key, assignment[key])]
+            except KeyError:
+                for cache_key, cache_val in cache.items():
+                    if isinstance(cache_key[1], ALL):
+                        if isinstance(cache_val, CacheDict):
+                            yield from self.retrieve(assignment, cache_val, key_idx + 1, copy(result))
+                        else:
+                            yield copy(result), cache_val
+                return
             if key_idx+1 < len(self.keys):
                 key_idx = key_idx + 1
                 key = self.keys[key_idx]
@@ -267,11 +295,13 @@ class IndexedCache:
                 break
         if key not in assignment:
             for cache_key, cache_val in cache.items():
-                result = copy(result)
-                result[key] = cache_key[1]
+                if not isinstance(cache_key[1], ALL):
+                    result = copy(result)
+                    result[key] = cache_key[1]
                 if isinstance(cache_val, CacheDict):
                     yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
                 else:
+                    self.found_count += 1
                     yield result, cache_val
         else:
             yield result, cache

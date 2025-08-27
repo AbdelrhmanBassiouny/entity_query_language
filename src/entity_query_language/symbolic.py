@@ -796,15 +796,20 @@ class BinaryOperator(ConstrainingOperator, ABC):
         self.left, self.right = self._update_children_(self.left, self.right)
         self._cache_.keys = list(self.left._unique_variables_.union(self.right._unique_variables_).values.keys())
 
-    def yield_from_cache(self, variables_sources):
-        for values, is_false in self._cache_.retrieve(variables_sources):
+    def yield_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None):
+        cache = self._cache_ if cache is None else cache
+        for values, is_false in cache.retrieve(variables_sources):
             self._is_false_ = is_false
+            _cache_enter_count.values[self._node_.name] = cache.enter_count
+            _cache_search_count.values[self._node_.name] = cache.search_count
+            _cache_match_count.values[self._node_.name] = cache.found_count
             yield HashedIterable(values=values)
 
-    def update_cache(self, values: HashedIterable):
+    def update_cache(self, values: HashedIterable, cache: Optional[IndexedCache] = None):
         if not is_caching_enabled():
             return
-        self._cache_.insert(values.values, output=self._is_false_)
+        cache = self._cache_ if cache is None else cache
+        cache.insert({k: v for k, v in values.values.items() if k in cache.keys}, output=self._is_false_)
 
     @property
     @lru_cache(maxsize=None)
@@ -875,10 +880,10 @@ class Comparator(BinaryOperator):
         """
         sources = sources or HashedIterable()
 
-        # if is_caching_enabled():
-        if self._cache_.check(sources.values):
-            yield from self.yield_from_cache(sources.values)
-            return
+        if is_caching_enabled():
+            if self._cache_.check(sources.values):
+                yield from self.yield_from_cache(sources.values)
+                return
 
         order_operand_map = self.get_operand_order_map(sources)
 
@@ -920,6 +925,11 @@ class LogicalOperator(BinaryOperator, ABC):
     seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()}, init=False)
     right_output_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
     left_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
+    right_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.right_cache.keys = [v.id_ for v in self.right._unique_variables_]
 
     @property
     def _name_(self):
@@ -948,29 +958,6 @@ class LogicalOperator(BinaryOperator, ABC):
         required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
-    def update_right_output_cache(self, output):
-        if not is_caching_enabled():
-            return
-        values_for_right_leaves = {k: v for k, v in output.values.items() if k in self.right._unique_variables_}
-        # Store the compact right-leaf assignment and the resulting is_false flag
-        t0 = time.perf_counter()
-        self.right_output_cache.add(values_for_right_leaves, outputs=[(dict(values_for_right_leaves), self._is_false_)])
-        _cache_update_time.add(self._node_.name, time.perf_counter() - t0)
-
-    def yield_values_from_cache(self, values_for_right_leaves, left_value):
-        _cache_enter_count.update(self._node_.name)
-        t0 = time.perf_counter()
-        cached = self.right_output_cache.retrieve(values_for_right_leaves) or []
-        _cache_lookup_time.add(self._node_.name, time.perf_counter() - t0)
-        _cache_search_count.values[self._node_.name] = self.right_output_cache.search_count
-        for cached_k_dict, is_false in cached:
-            _cache_match_count.update(self._node_.name)
-            self._is_false_ = is_false
-            output = left_value.union(HashedIterable(values=cached_k_dict))
-            output = self.yield_or_skip(output)
-            if output is not None:
-                yield output
-
 
 @dataclass(eq=False)
 class AND(LogicalOperator):
@@ -994,12 +981,7 @@ class AND(LogicalOperator):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         # init an empty source if none is provided
         sources = sources or HashedIterable()
-        # right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-
-        if is_caching_enabled():
-            if self._cache_.check(sources.values):
-                yield from self.yield_from_cache(sources.values)
-                return
+        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -1013,13 +995,10 @@ class AND(LogicalOperator):
                     yield output
                 continue
 
-            # values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            # if is_caching_enabled() and self.seen_left_values.check(values_for_right_leaves):
-            #     yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
-            #     continue
-            # else:
-            #     if is_caching_enabled():
-            #         self.seen_left_values.add(values_for_right_leaves)
+            if is_caching_enabled():
+                if self.right_cache.check(left_value.values):
+                    yield from self.yield_from_cache(left_value.values, self.right_cache)
+                    continue
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1029,10 +1008,10 @@ class AND(LogicalOperator):
             for right_value in right_values:
                 right_value = right_value.union(left_value)
                 self._is_false_ = self.right._is_false_
-                self.update_cache(right_value)
                 # output = self.yield_or_skip(right_value)
                 output = right_value
                 if output is not None:
+                    self.update_cache(right_value, self.right_cache)
                     yield output
 
 
@@ -1236,24 +1215,16 @@ class XOR(ConclusionSelector):
         """
         # init an empty source if none is provided
         sources = sources or HashedIterable()
-        shared_ids = list(map(lambda v: v.value._id_,
-                         self.left._unique_variables_.intersection(self.right._unique_variables_)))
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
             left_value = left_value.union(sources)
             if self.left._is_false_:
-                # values_for_right_leaves = {k: left_value[k] for k in shared_ids if k in left_value}
-                # if is_caching_enabled() and self.seen_left_negative_values_values.check(values_for_right_leaves):
-                #     yield from self.yield_values_from_cache(values_for_right_leaves, left_value)
-                #     continue
-                # if is_caching_enabled():
-                #     self.seen_left_negative_values_values.add(values_for_right_leaves)
-                # if is_caching_enabled():
-                # if self._cache_.check(values_for_right_leaves):
-                #     yield from self.yield_from_cache(values_for_right_leaves)
-                #     return
+                if is_caching_enabled():
+                    if self.right_cache.check(left_value.values):
+                        yield from self.yield_from_cache(left_value.values, self.right_cache)
+                        continue
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:
                     self._is_false_ = self.right._is_false_
@@ -1261,18 +1232,16 @@ class XOR(ConclusionSelector):
                         self._conclusion_.update(self.right._conclusion_)
                     elif not self._yield_when_false_:
                         continue
-                    output = self.yield_or_skip(left_value.union(right_value))
+                    output = left_value.union(right_value)
                     if output is not None:
-                        # self.update_cache(output)
+                        self.update_cache(right_value, self.right_cache)
                         yield output
                     self._conclusion_.clear()
+
             else:
                 self._is_false_ = False
                 self._conclusion_.update(self.left._conclusion_)
-                # output = self.yield_or_skip(left_value)
-                output = left_value
-                if output is not None:
-                    yield output
+                yield left_value
                 self._conclusion_.clear()
 
 
