@@ -226,7 +226,7 @@ class SymbolicExpression(Generic[T], ABC):
         ...
 
     def __xor__(self, other) -> SymbolicExpression:
-        return XOR(self, other)
+        return OR(self, other)
 
     def __and__(self, other):
         return AND(self, other)
@@ -719,6 +719,10 @@ class DomainMapping(HasDomain, ABC):
             for child_v in child_val:
                 v = self._apply_mapping_(child_v)
                 if (not self._invert_ and v.value) or (self._invert_ and not v.value):
+                    self._is_false_ = False
+                else:
+                    self._is_false_ = True
+                if self._yield_when_false_ or not self._is_false_:
                     yield HashedIterable(values={self._parent_variable_._id_: self._parent_variable_._domain_[v.id_]})
         else:
             yield from (self._apply_mapping_(v) for v in child_val)
@@ -787,6 +791,8 @@ class BinaryOperator(ConstrainingOperator, ABC):
     right: SymbolicExpression
     _child_: SymbolicExpression = field(init=False, default=None)
     _cache_: IndexedCache = field(default_factory=IndexedCache, init=False)
+    seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
+                                                    init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -800,11 +806,25 @@ class BinaryOperator(ConstrainingOperator, ABC):
             entered = True
             self._is_false_ = is_false
             _cache_match_count.values[self._node_.name] += 1
-            yield HashedIterable(values=values)
+            output = HashedIterable(values=values)
+            if is_false and self.is_duplicate_output(output):
+                continue
+            yield output
         if not entered:
             _cache_match_count.values[self._node_.name] += 1
         _cache_enter_count.values[self._node_.name] = cache.enter_count
         _cache_search_count.values[self._node_.name] = cache.search_count
+
+    def is_duplicate_output(self, output: HashedIterable) -> bool:
+        required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
+        if not required_vars:
+            return False
+        required_output = {k: v for k, v in output.values.items() if k in required_vars}
+        if self.seen_parent_values[not self._is_false_].check(required_output):
+            return True
+        else:
+            self.seen_parent_values[not self._is_false_].add(required_output)
+            return False
 
     def update_cache(self, values: HashedIterable, cache: Optional[IndexedCache] = None):
         if not is_caching_enabled():
@@ -924,8 +944,6 @@ class LogicalOperator(BinaryOperator, ABC):
     """
 
     right_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
-    seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
-                                                    init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -934,17 +952,6 @@ class LogicalOperator(BinaryOperator, ABC):
     @property
     def _name_(self):
         return self.__class__.__name__
-
-    def is_duplicate_output(self, output: HashedIterable) -> bool:
-        required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
-        if not required_vars:
-            return False
-        required_output = {k: v for k, v in output.values.items() if k in required_vars}
-        if self.seen_parent_values[not self._is_false_].check(required_output):
-            return True
-        else:
-            self.seen_parent_values[not self._is_false_].add(required_output)
-            return False
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
@@ -975,6 +982,8 @@ class AND(LogicalOperator):
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
+                if self.is_duplicate_output(left_value):
+                    continue
                 yield left_value
                 continue
 
@@ -990,43 +999,10 @@ class AND(LogicalOperator):
             for right_value in right_values:
                 output = right_value.union(left_value)
                 self._is_false_ = self.right._is_false_
+                if self._is_false_ and self.is_duplicate_output(output):
+                    continue
                 self.update_cache(right_value, self.right_cache)
                 yield output
-
-
-@dataclass(eq=False)
-class OR(LogicalOperator):
-    """
-    A symbolic OR operation that can be used to combine multiple symbolic expressions.
-    """
-    seen_values: SeenSet = field(default_factory=SeenSet, init=False)
-
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
-        required_vars = self._parent_._required_variables_from_child_(self, when_true)
-        for conc in self._conclusion_:
-            required_vars.update(conc._unique_variables_)
-        return required_vars
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        """
-        Constrain the symbolic expression based on the indices of the operands.
-        This method overrides the base class method to handle OR logic.
-        """
-        # init an empty source if none is provided
-        sources = sources or HashedIterable()
-
-        # constrain left values by available sources
-        for operand in [self.left, self.right]:
-
-            operand_values = operand._evaluate__(sources)
-
-            for operand_value in operand_values:
-                required_vars = self._required_variables_from_child_(operand, when_true=not self._is_false_)
-                output_for_parent = {k: v for k, v in operand_value.values.items() if k in required_vars}
-                if self.seen_values.check(output_for_parent):
-                    continue
-                self.seen_values.add(output_for_parent)
-                yield sources.union(operand_value)
 
 
 @dataclass(eq=False)
@@ -1123,10 +1099,10 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
     """
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
-    if isinstance(current_node._parent_, XOR):
+    if isinstance(current_node._parent_, OR):
         current_node = current_node._parent_
     prev_parent = current_node._parent_
-    new_conditions_root = XOR(current_node, new_branch)
+    new_conditions_root = OR(current_node, new_branch)
     new_branch._node_.weight = RDREdge.Alternative
     new_conditions_root._parent_ = prev_parent
     if isinstance(prev_parent, BinaryOperator):
@@ -1135,7 +1111,7 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
 
 
 @dataclass(eq=False)
-class XOR(ConclusionSelector):
+class OR(ConclusionSelector):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
@@ -1190,6 +1166,8 @@ class XOR(ConclusionSelector):
                         self.update_conclusion(output, self.right._conclusion_)
                     elif not self._yield_when_false_:
                         continue
+                    if self._is_false_ and self.is_duplicate_output(output):
+                        continue
                     self.update_cache(right_value, self.right_cache)
                     yield output
             else:
@@ -1208,6 +1186,9 @@ def Not(operand: Any) -> SymbolicExpression:
     if isinstance(operand, AND):
         operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
+        for child in operand.left._descendants_:
+            child._yield_when_false_ = False
+        operand.left._yield_when_false_ = False
         operand = AND(Not(operand.left), Not(operand.right))
     else:
         operand._invert_ = True

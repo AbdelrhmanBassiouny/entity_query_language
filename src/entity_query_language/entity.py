@@ -5,7 +5,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
-    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType
+    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType, OR
 from .utils import render_tree, is_iterable
 
 T = TypeVar('T')  # Define type variable "T"

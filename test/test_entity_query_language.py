@@ -1,7 +1,7 @@
 import pytest
 
 from entity_query_language import And, Or, Not, contains, in_
-from entity_query_language.entity import an, entity, set_of, let, the
+from entity_query_language.entity import an, entity, set_of, let, the, Or
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative
 from entity_query_language.cache_data import _cache_enter_count, _cache_search_count, _cache_match_count, \
@@ -126,9 +126,9 @@ def test_generate_with_and_or(handles_and_containers_world):
 
     def generate_handles_and_container1():
         query = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                             Or(contains(body.name, "Handle"), contains(body.name, '1'))
-                             , Or(contains(body.name, 'Container'), contains(body.name, '1'))
-                             )
+                          Or(contains(body.name, "Handle"), contains(body.name, '1'))
+                          , Or(contains(body.name, 'Container'), contains(body.name, '1'))
+                          )
                       )
         # query._render_tree_()
         yield from query.evaluate()
