@@ -121,9 +121,6 @@ class SymbolicExpression(Generic[T], ABC):
         """
         pass
 
-    def _update_conclusion_(self):
-        pass
-
     def _add_conclusion_(self, conclusion: Conclusion):
         self._conclusion_.add(conclusion)
 
@@ -798,12 +795,16 @@ class BinaryOperator(ConstrainingOperator, ABC):
 
     def yield_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None):
         cache = self._cache_ if cache is None else cache
+        entered = False
         for values, is_false in cache.retrieve(variables_sources):
+            entered = True
             self._is_false_ = is_false
-            _cache_enter_count.values[self._node_.name] = cache.enter_count
-            _cache_search_count.values[self._node_.name] = cache.search_count
             _cache_match_count.values[self._node_.name] += 1
             yield HashedIterable(values=values)
+        if not entered:
+            _cache_match_count.values[self._node_.name] += 1
+        _cache_enter_count.values[self._node_.name] = cache.enter_count
+        _cache_search_count.values[self._node_.name] = cache.search_count
 
     def update_cache(self, values: HashedIterable, cache: Optional[IndexedCache] = None):
         if not is_caching_enabled():
@@ -922,10 +923,9 @@ class LogicalOperator(BinaryOperator, ABC):
     A symbolic operation that can be used to combine multiple symbolic expressions.
     """
 
-    seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()}, init=False)
-    right_output_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
-    left_output_cache: Dict[frozenset, bool] = field(default_factory=dict, init=False)
     right_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
+    seen_parent_values: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
+                                                    init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -935,17 +935,16 @@ class LogicalOperator(BinaryOperator, ABC):
     def _name_(self):
         return self.__class__.__name__
 
-    def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
+    def is_duplicate_output(self, output: HashedIterable) -> bool:
         required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
-        # If the parent requires no variables, there's nothing to deduplicate on.
-        if not required_vars.values:
-            return output
+        if not required_vars:
+            return False
         required_output = {k: v for k, v in output.values.items() if k in required_vars}
         if self.seen_parent_values[not self._is_false_].check(required_output):
-            return None
+            return True
         else:
             self.seen_parent_values[not self._is_false_].add(required_output)
-            return output
+            return False
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
@@ -965,23 +964,10 @@ class AND(LogicalOperator):
     A symbolic AND operation that can be used to combine multiple symbolic expressions.
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
-    seen_source_values: SeenSet = field(default_factory=SeenSet, init=False)
-    seen_right_values: SeenSet = field(default_factory=SeenSet, init=False)
-
-    @property
-    def _should_cache_output_(self):
-        return self._yield_when_false_
-        return (self._receives_values_from_an_or_node
-                or self._is_in_right_branch_of_an_xor_that_has_and_nodes_in_left_branch)
-
-    @property
-    def _receives_values_from_an_or_node(self):
-        return self._has_a_left_that_has_an_or_node
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         # init an empty source if none is provided
         sources = sources or HashedIterable()
-        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
@@ -989,16 +975,12 @@ class AND(LogicalOperator):
             left_value = left_value.union(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
-                # output = self.yield_or_skip(left_value)
-                output = left_value
-                if output is not None:
-                    yield output
+                yield left_value
                 continue
 
-            if is_caching_enabled():
-                if self.right_cache.check(left_value.values):
-                    yield from self.yield_from_cache(left_value.values, self.right_cache)
-                    continue
+            if is_caching_enabled() and self.right_cache.check(left_value.values):
+                yield from self.yield_from_cache(left_value.values, self.right_cache)
+                continue
 
             # constrain right values by available sources
             right_values = self.right._evaluate__(left_value)
@@ -1006,13 +988,10 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
-                right_value = right_value.union(left_value)
+                output = right_value.union(left_value)
                 self._is_false_ = self.right._is_false_
-                # output = self.yield_or_skip(right_value)
-                output = right_value
-                if output is not None:
-                    self.update_cache(right_value, self.right_cache)
-                    yield output
+                self.update_cache(right_value, self.right_cache)
+                yield output
 
 
 @dataclass(eq=False)
@@ -1044,10 +1023,6 @@ class OR(LogicalOperator):
             for operand_value in operand_values:
                 required_vars = self._required_variables_from_child_(operand, when_true=not self._is_false_)
                 output_for_parent = {k: v for k, v in operand_value.values.items() if k in required_vars}
-                if not output_for_parent:
-                    # No required vars to deduplicate by; yield directly.
-                    yield sources.union(operand_value)
-                    continue
                 if self.seen_values.check(output_for_parent):
                     continue
                 self.seen_values.add(output_for_parent)
@@ -1056,20 +1031,20 @@ class OR(LogicalOperator):
 
 @dataclass(eq=False)
 class ConclusionSelector(LogicalOperator, ABC):
+    concluded_before: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
+                                                  init=False)
 
-    def yield_or_skip(self, output: HashedIterable) -> Optional[HashedIterable]:
-        self._update_conclusion_()
-        required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
-        # If no variables are required by the parent, always yield and don't record in seen sets.
-        if not required_vars.values:
-            return output
+    def update_conclusion(self, output: HashedIterable, conclusions: typing.Set[Conclusion]) -> None:
+        if not conclusions:
+            return
+        required_vars = HashedIterable()
+        for conclusion in conclusions:
+            required_vars.update(conclusion._unique_variables_)
         required_output = {k: v for k, v in output.values.items() if k in required_vars}
-        if self.seen_parent_values[not self._is_false_].check(required_output):
-            self._conclusion_.clear()
-            return None
-        else:
-            self.seen_parent_values[not self._is_false_].add(required_output)
-            return output
+        if not self.concluded_before[not self._is_false_].check(required_output):
+            self._conclusion_.update(conclusions)
+            self.concluded_before[not self._is_false_].add(required_output)
+
 
 def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
     """
@@ -1085,13 +1060,6 @@ def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpre
 
 @dataclass(eq=False)
 class ExceptIf(ConclusionSelector):
-
-    def _update_conclusion_(self):
-        if not self.left._is_false_:
-            if self.right._is_false_:
-                self._conclusion_.update(self.left._conclusion_)
-            else:
-                self._conclusion_.update(self.right._conclusion_)
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
@@ -1171,20 +1139,12 @@ class XOR(ConclusionSelector):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
-    right_output_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
-    seen_left_negative_values_values: SeenSet = field(default_factory=SeenSet, init=False)
 
     def __post_init__(self):
         super().__post_init__()
         self.left._yield_when_false_ = True
         for child in self.left._descendants_:
             child._yield_when_false_ = True
-
-    def _update_conclusion_(self):
-        if not self.left._is_false_:
-            self._conclusion_.update(self.left._conclusion_)
-        if self.left._is_false_ and not self._is_false_:
-            self._conclusion_.update(self.right._conclusion_)
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: Optional[bool] = None):
         if not child:
@@ -1204,8 +1164,6 @@ class XOR(ConclusionSelector):
                 for conc in self.right._conclusion_:
                     required_vars.update(conc._unique_variables_)
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
-        for conc in self._conclusion_:
-            required_vars.update(conc._unique_variables_)
         return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
@@ -1221,28 +1179,24 @@ class XOR(ConclusionSelector):
         for left_value in left_values:
             left_value = left_value.union(sources)
             if self.left._is_false_:
-                if is_caching_enabled():
-                    if self.right_cache.check(left_value.values):
-                        yield from self.yield_from_cache(left_value.values, self.right_cache)
-                        continue
+                if is_caching_enabled() and self.right_cache.check(left_value.values):
+                    yield from self.yield_from_cache(left_value.values, self.right_cache)
+                    continue
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:
                     self._is_false_ = self.right._is_false_
+                    output = left_value.union(right_value)
                     if not self._is_false_:
-                        self._conclusion_.update(self.right._conclusion_)
+                        self.update_conclusion(output, self.right._conclusion_)
                     elif not self._yield_when_false_:
                         continue
-                    output = left_value.union(right_value)
-                    if output is not None:
-                        self.update_cache(right_value, self.right_cache)
-                        yield output
-                    self._conclusion_.clear()
-
+                    self.update_cache(right_value, self.right_cache)
+                    yield output
             else:
                 self._is_false_ = False
-                self._conclusion_.update(self.left._conclusion_)
+                self.update_conclusion(left_value, self.left._conclusion_)
                 yield left_value
-                self._conclusion_.clear()
+            self._conclusion_.clear()
 
 
 def Not(operand: Any) -> SymbolicExpression:

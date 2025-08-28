@@ -271,22 +271,16 @@ class IndexedCache:
             self.enter_count += 1
         if isinstance(cache, CacheDict) and len(cache) == 0:
             return
-        self.search_count += 1
-        try:
-            key = self.keys[key_idx]
-        except IndexError:
-            return
+        key = self.keys[key_idx]
         while key in assignment:
             try:
                 cache = cache[(key, assignment[key])]
             except KeyError:
                 for cache_key, cache_val in cache.items():
-                    self.search_count += 1
                     if isinstance(cache_key[1], ALL):
-                        if isinstance(cache_val, CacheDict):
-                            yield from self.retrieve(assignment, cache_val, key_idx + 1, copy(result))
-                        else:
-                            yield copy(result), cache_val
+                        yield from self._yield_result(assignment, cache_val, key_idx,result)
+                    else:
+                        self.search_count += 1
                 return
             if key_idx+1 < len(self.keys):
                 key_idx = key_idx + 1
@@ -298,12 +292,16 @@ class IndexedCache:
                 if not isinstance(cache_key[1], ALL):
                     result = copy(result)
                     result[key] = cache_key[1]
-                if isinstance(cache_val, CacheDict):
-                    yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
-                else:
-                    yield result, cache_val
+                yield from self._yield_result(assignment, cache_val, key_idx, result)
         else:
             yield result, cache
+
+    def _yield_result(self, assignment: Dict, cache_val: Any, key_idx: int, result: Dict[int, Any]):
+        if isinstance(cache_val, CacheDict):
+            self.search_count += 1
+            yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
+        else:
+            yield result, cache_val
 
 
 def filter_data(data, selected_indices):
