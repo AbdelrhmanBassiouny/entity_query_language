@@ -1,23 +1,27 @@
 from __future__ import annotations
+"""
+Core symbolic expression system used to build and evaluate entity queries.
 
+This module defines the symbolic types (variables, sources, logical and
+comparison operators) and the evaluation mechanics.
+"""
 import contextvars
 import operator
 import typing
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import FrozenSet
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
 from typing_extensions import dataclass_transform, List, Tuple, Callable
 
 from .cache_data import _cache_enter_count, _cache_search_count, _cache_match_count, _cache_lookup_time, \
-    _cache_update_time, is_caching_enabled
+    _cache_update_time, is_caching_enabled, SeenSet, IndexedCache
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
-from .utils import make_list, IDGenerator, SeenSet, IndexedCache, is_iterable, render_tree, HashedValue, \
-    HashedIterable
+from .utils import make_list, IDGenerator, is_iterable, render_tree
+from .hashed_data import HashedValue, HashedIterable
 import time
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
@@ -33,6 +37,14 @@ def in_symbolic_mode():
 
 @dataclass
 class SymbolicRule:
+    """
+    Context manager to temporarily enable symbolic construction mode.
+
+    Within the context, calling classes decorated with ``@symbol`` produces
+    symbolic Variables instead of real instances.
+
+    :ivar query: Optional symbolic expression to also enter/exit as a context.
+    """
     query: Optional[SymbolicExpression] = None
 
     def __enter__(self):
@@ -49,6 +61,16 @@ class SymbolicRule:
 
 @dataclass_transform()
 def symbol(cls):
+    """
+    Class decorator that makes a class construct symbolic Variables when inside
+    a SymbolicRule context.
+
+    When symbolic mode is active, calling the class returns a Variable bound to
+    either a provided domain or to deferred keyword domain sources.
+
+    :param cls: The class to decorate.
+    :return: The same class with a patched ``__new__``.
+    """
     orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
@@ -69,6 +91,19 @@ id_generator = IDGenerator()
 
 @dataclass(eq=False)
 class SymbolicExpression(Generic[T], ABC):
+    """
+    Base class for all symbolic expressions.
+
+    Symbolic expressions form a tree and are evaluated lazily to produce
+    bindings for variables, subject to logical constraints.
+
+    :ivar _child_: Optional child expression.
+    :ivar _id_: Unique identifier of this node.
+    :ivar _node_: Backing anytree.Node for visualization and traversal.
+    :ivar _conclusion_: Set of conclusion actions attached to this node.
+    :ivar _yield_when_false_: If True, may yield even when the expression is false.
+    :ivar _is_false_: Internal flag indicating evaluation result for this node.
+    """
     _child_: Optional[SymbolicExpression] = field(init=False)
     _id_: int = field(init=False, repr=False, default=None)
     _node_: Node = field(init=False, default=None, repr=False)
@@ -225,9 +260,6 @@ class SymbolicExpression(Generic[T], ABC):
         """
         ...
 
-    def __xor__(self, other) -> SymbolicExpression:
-        return OR(self, other)
-
     def __and__(self, other):
         return AND(self, other)
 
@@ -253,6 +285,13 @@ class SymbolicExpression(Generic[T], ABC):
 
 @dataclass(eq=False)
 class Source(SymbolicExpression[T]):
+    """
+    Leaf expression that wraps a concrete Python iterable or value as a domain
+    source for variables.
+
+    :ivar _name__: Source name used in visualization and in id construction.
+    :ivar _value_: Backing value or iterable.
+    """
     _name__: str
     _value_: T
     _child_: Optional[SymbolicExpression[T]] = field(init=False)
@@ -308,6 +347,10 @@ class SourceCall(Source):
 
 @dataclass(eq=False)
 class ResultQuantifier(SymbolicExpression[T], ABC):
+    """
+    Base for quantifiers that return concrete results from entity/set queries
+    (e.g., An, The).
+    """
     _child_: Entity[T]
 
     @property
@@ -332,7 +375,7 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
 
     def else_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
         new_branch = chained_logic(AND, *conditions)
-        new_conditions_root = self._conditions_root_ ^ new_branch
+        new_conditions_root = self._conditions_root_ | new_branch
         new_branch._node_.weight = RDREdge.Alternative
         new_conditions_root._node_.parent = self._child_._node_
         return self
@@ -352,6 +395,12 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
 
 @dataclass(eq=False)
 class Conclusion(SymbolicExpression[T], ABC):
+    """
+    Base for side-effecting/action clauses that adjust outputs (e.g., Set, Add).
+
+    :ivar var: The variable being affected by the conclusion.
+    :ivar value: The value or expression used by the conclusion.
+    """
     var: HasDomain
     value: Any
     _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
@@ -382,6 +431,7 @@ class Conclusion(SymbolicExpression[T], ABC):
 
 @dataclass(eq=False)
 class Set(Conclusion[T]):
+    """Set the value of a variable in the current solution binding."""
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         if self._parent_._id_ not in sources:
@@ -394,6 +444,7 @@ class Set(Conclusion[T]):
 
 @dataclass(eq=False)
 class Add(Conclusion[T]):
+    """Add a new value to the domain of a variable."""
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         v = next(iter(self.value._evaluate__(sources)))
@@ -404,6 +455,9 @@ class Add(Conclusion[T]):
 
 @dataclass(eq=False)
 class The(ResultQuantifier[T]):
+    """
+    Quantifier that expects exactly one result; raises MultipleSolutionFound if more.
+    """
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
         sol_gen = self._child_._evaluate__(sources)
@@ -418,6 +472,7 @@ class The(ResultQuantifier[T]):
 
 @dataclass(eq=False)
 class An(ResultQuantifier[T]):
+    """Quantifier that yields all matching results one by one."""
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
         yield from self._child_._evaluate__(sources)
@@ -894,10 +949,8 @@ class Comparator(BinaryOperator):
         :param sources: Dictionary of symbolic variable id to a value of that variable, the left and right values
         will retrieve values from sources if they exist, otherwise will directly retrieve them from the original
         sources.
-        :return: Dictionary of symbolic variable id to a value of that variable, it will contain only two values,
-        the left and right symbolic values.
-        :raises StopIteration: If one of the left or right values are being retrieved directly from the original
-        source and the source has been exhausted.
+        :return: Yields a HashedIterable mapping a symbolic variable id to a value of that variable, it will contain
+         only two values, the left and right symbolic values.
         """
         sources = sources or HashedIterable()
 
