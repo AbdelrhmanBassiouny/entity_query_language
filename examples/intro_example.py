@@ -29,24 +29,24 @@ class World:
 
 world = World(1, [Body("Body1"), Body("Body2")])
 
-results_generator = an(entity(body := let(type_=Body, domain=world.bodies),
-                              And(contains(body.name, "2"), body.name.startswith("Body")))
-                       ).evaluate()
+results_generator = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                              And(contains(body.name, "2"), body.name.startswith("Body"))
+                       )).evaluate()
 results = list(results_generator)
 assert len(results) == 1
 assert results[0].name == "Body2"
 
 
 world = World(1, [Body("Body1"), Body("Body2")])
-body1 = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body1"))).evaluate()
+body1 = the(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Body1"))).evaluate()
 try:
-    body = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body"))).evaluate()
+    body = the(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Body"))).evaluate()
     assert False
 except MultipleSolutionFound:
     pass
 
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
-result = an(entity(body := let(type_=Body, domain=world.bodies),
+result = an(entity(body := let("body", type_=Body, domain=world.bodies),
                    And(Or(body.name.startswith("C"), body.name.endswith("1")),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        )
@@ -57,7 +57,7 @@ assert len(results) == 2
 assert results[0].name == "Container1" and results[1].name == "Handle1"
 
 
-result = an(entity(body := let(type_=Body, domain=world.bodies),
+result = an(entity(body := let("body", type_=Body, domain=world.bodies),
                    Not(And(Or(body.name.startswith("C"), body.name.endswith("1")),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        ))
@@ -65,11 +65,11 @@ result = an(entity(body := let(type_=Body, domain=world.bodies),
             ).evaluate()
 results = list(result)
 assert len(results) == 2
-assert results[1].name == "Container2" and results[0].name == "Handle2"
+assert results[0].name == "Container2" and results[1].name == "Handle2"
 
 world2 = World(2, [Body("Container3"), Body("Handle3"), Body("Handle2")])
 
-result = an(entity(body := let(type_=Body, domain=world2.bodies),
+result = an(entity(body := let("body", type_=Body, domain=world2.bodies),
                    And(body.name.startswith('H'), in_(body, world.bodies))
                    )
             ).evaluate()
@@ -114,11 +114,11 @@ c1_c2 = Prismatic(world.bodies[0], world.bodies[1])
 c2_h2 = Fixed(world.bodies[1], world.bodies[3])
 world.connections = [c1_c2, c2_h2]
 
-parent_container = let(type_=Body, domain=world.bodies)
-prismatic_connection = let(type_=Prismatic, domain=world.connections)
-drawer_body = let(type_=Body, domain=world.bodies)
-fixed_connection = let(type_=Fixed, domain=world.connections)
-handle = let(type_=Body, domain=world.bodies)
+parent_container = let("parent_container", type_=Body, domain=world.bodies)
+prismatic_connection = let("prismatic_connection", type_=Prismatic, domain=world.connections)
+drawer_body = let("drawer_body", type_=Body, domain=world.bodies)
+fixed_connection = let("fixed_connection", type_=Fixed, domain=world.connections)
+handle = let("handle", type_=Body, domain=world.bodies)
 
 drawer_kinematic_tree = (parent_container, prismatic_connection, drawer_body, fixed_connection, handle)
 result = an(set_of(drawer_kinematic_tree,

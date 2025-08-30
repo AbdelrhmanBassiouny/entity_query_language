@@ -60,11 +60,11 @@ world.connections = [c1_c2, c2_h2]
 
 # Query for the kinematic tree of the drawer which has more than one component.
 # Declare the placeholders
-parent_container = let(type_=Body, domain=world.bodies)
-prismatic_connection = let(type_=Prismatic, domain=world.connections)
-drawer_body = let(type_=Body, domain=world.bodies)
-fixed_connection = let(type_=Fixed, domain=world.connections)
-handle = let(type_=Body, domain=world.bodies)
+parent_container = let("parent_container", type_=Body, domain=world.bodies)
+prismatic_connection = let("prismatic_connection", type_=Prismatic, domain=world.connections)
+drawer_body = let("drawer_body", type_=Body, domain=world.bodies)
+fixed_connection = let("fixed_connection", type_=Fixed, domain=world.connections)
+handle = let("handle", type_=Body, domain=world.bodies)
 
 # Write the query body
 with SymbolicRule():

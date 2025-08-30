@@ -25,9 +25,9 @@ class World:
 
 
 world = World(1, [Body("Body1"), Body("Body2")])
-body1 = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body1"))).evaluate()
+body1 = the(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Body1"))).evaluate()
 try:
-    body = the(entity(body := let(type_=Body, domain=world.bodies), body.name.startswith("Body")))
+    body = the(entity(body := let("body", type_=Body, domain=world.bodies), body.name.startswith("Body")))
     assert False
 except MultipleSolutionFound:
     pass

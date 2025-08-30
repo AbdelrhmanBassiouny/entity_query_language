@@ -1119,20 +1119,16 @@ class ExceptIf(ConclusionSelector):
 
         # init an empty source if none is provided
         sources = sources or HashedIterable()
-        right_values_leaf_ids = [leaf.id_ for leaf in self.right._unique_variables_]
-        seen_left_values = SeenSet()
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
 
-            values_for_right_leaves = {k: left_value[k] for k in right_values_leaf_ids if k in left_value}
-            if seen_left_values.check(values_for_right_leaves):
-                continue
-            else:
-                seen_left_values.add(values_for_right_leaves)
-
             left_value = left_value.union(sources)
+
+            if is_caching_enabled() and self.right_cache.check(left_value.values):
+                yield from self.yield_from_cache(left_value.values, self.right_cache)
+                continue
 
             right_yielded = False
             for right_value in self.right._evaluate__(left_value):

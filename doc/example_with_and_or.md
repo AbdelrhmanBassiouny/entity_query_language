@@ -22,7 +22,7 @@ class World:
 
 
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
-result = an(entity(body := let(type_=Body, domain=world.bodies),
+result = an(entity(body := let("body", type_=Body, domain=world.bodies),
                    And(Or(body.name.startswith("C"), body.name.endswith("1")),
                        Or(body.name.startswith("H"), body.name.endswith("1"))
                        )
