@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from functools import wraps
-from typing import Optional, dataclass_transform, Union, Callable
 
 from .enums import RDREdge
 
@@ -12,7 +10,7 @@ User interface (grammar & vocabulary) for entity query language.
 """
 import operator
 
-from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
+from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
     chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType, OR, _set_symbolic_mode, in_symbolic_mode, T, \
