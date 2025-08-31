@@ -16,7 +16,7 @@ EQL tries to mirror your intent in a query statement with as less boiler plate c
 For example an attribute access with and equal check to another value is just how you expect:
 
 ```python
-from entity_query_language import entity, an, let, And, contains
+from entity_query_language import entity, an, let, and_, contains
 from dataclasses import dataclass
 from typing_extensions import List
 
@@ -35,7 +35,7 @@ class World:
 world = World(1, [Body("Body1"), Body("Body2")])
 
 results_generator = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                              And(contains(body.name,"2"), body.name.startswith("Body")))
+                              and_(contains(body.name, "2"), body.name.startswith("Body")))
                        ).evaluate()
 results = list(results_generator)
 assert len(results) == 1

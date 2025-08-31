@@ -1,4 +1,12 @@
 from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import dataclass
+from functools import wraps
+from typing import Optional, dataclass_transform, Union, Callable
+
+from .enums import RDREdge
+
 """
 User interface (grammar & vocabulary) for entity query language.
 """
@@ -7,7 +15,8 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
-    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType, OR
+    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType, OR, _set_symbolic_mode, in_symbolic_mode, T, \
+    ExceptIf, BinaryOperator, Call, Predicate, Not
 from .utils import render_tree, is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
@@ -48,7 +57,7 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool]) -
     :return: Entity descriptor.
     :rtype: Entity[T]
     """
-    expression = And(*properties) if len(properties) > 1 else properties[0]
+    expression = and_(*properties) if len(properties) > 1 else properties[0]
     return Entity(_child_=expression, selected_variable_=selected_variable)
 
 
@@ -63,7 +72,7 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :return: Set descriptor.
     :rtype: SetOf[T]
     """
-    expression = And(*properties) if len(properties) > 1 else properties[0]
+    expression = and_(*properties) if len(properties) > 1 else properties[0]
     return SetOf(_child_=expression, selected_variables_=selected_variables)
 
 
@@ -94,7 +103,7 @@ def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, Has
         return Source(name, domain)
 
 
-def And(*conditions):
+def and_(*conditions):
     """
     Logical conjunction of conditions.
 
@@ -106,7 +115,7 @@ def And(*conditions):
     return chained_logic(AND, *conditions)
 
 
-def Or(*conditions):
+def or_(*conditions):
     """
     Logical disjunction of conditions.
 
@@ -116,6 +125,13 @@ def Or(*conditions):
     :rtype: SymbolicExpression
     """
     return chained_logic(OR, *conditions)
+
+
+def not_(operand: SymbolicExpression):
+    """
+    A symbolic NOT operation that can be used to negate symbolic expressions.
+    """
+    return Not(operand)
 
 
 def contains(container, item):
@@ -140,3 +156,113 @@ def in_(item, container):
     :rtype: Comparator
     """
     return Comparator(container, item, operator.contains)
+
+
+@contextmanager
+def symbolic_mode(query: Optional[SymbolicExpression] = None):
+    """
+    Context manager to temporarily enable symbolic construction mode.
+
+    Within the context, calling classes decorated with ``@symbol`` produces
+    symbolic Variables instead of real instances.
+
+    :param query: Optional symbolic expression to also enter/exit as a context.
+    """
+    try:
+        if query is not None:
+            query.__enter__()
+        _set_symbolic_mode(True)
+        yield SymbolicExpression._current_parent_()
+    finally:
+        if query is not None:
+            query.__exit__()
+        _set_symbolic_mode(False)
+
+
+
+@dataclass_transform()
+def symbol(cls):
+    """
+    Class decorator that makes a class construct symbolic Variables when inside
+    a symbolic_rule context.
+
+    When symbolic mode is active, calling the class returns a Variable bound to
+    either a provided domain or to deferred keyword domain sources.
+
+    :param cls: The class to decorate.
+    :return: The same class with a patched ``__new__``.
+    """
+    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
+
+    def symbolic_new(symbolic_cls, *args, **kwargs):
+        if in_symbolic_mode():
+            if len(args) > 0:
+                return Variable(args[0], symbolic_cls, _domain_=args[1])
+            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
+        return orig_new(symbolic_cls)
+
+    cls.__new__ = symbolic_new
+    return cls
+
+
+def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]]:
+    """
+    Function decorator that constructs a symbolic expression representing the function call
+     when inside a symbolic_rule context.
+
+    When symbolic mode is active, calling the method returns a Call instance which is a SymbolicExpression bound to
+    representing the method call that is not evaluated until the evaluate() method is called on the query/rule.
+
+    :param function: The function to decorate.
+    :return: The decorated function.
+    """
+
+    @wraps(function)
+    def wrapper(*args, **kwargs) -> Optional[Any]:
+        if in_symbolic_mode():
+            return Predicate(function, _args_=args, _kwargs_=kwargs)
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
+def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
+    """
+    Add a refinement branch (ExceptIf node with its right the new conditions and its left the base/parent rule/query)
+     to the current condition tree.
+
+    Each provided condition is chained with AND, and the resulting branch is
+    connected via ExceptIf to the current node, representing a refinement/specialization path.
+
+    :param conditions: The refinement conditions. They are chained with AND.
+    :returns: The newly created branch node for further chaining.
+    """
+    new_branch = chained_logic(AND, *conditions)
+    prev_parent = SymbolicExpression._current_parent_()._parent_
+    new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
+    new_branch._node_.weight = RDREdge.Refinement
+    new_conditions_root._parent_ = prev_parent
+    return new_conditions_root.right
+
+
+def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
+    """
+    Add an alternative branch (logical OR) to the current condition tree.
+
+    Each provided condition is chained with AND, and the resulting branch is
+    connected via OR to the current node, representing an alternative path.
+
+    :param conditions: Conditions to chain with AND and attach as an alternative.
+    :returns: The newly created branch node for further chaining.
+    """
+    new_branch = chained_logic(AND, *conditions)
+    current_node = SymbolicExpression._current_parent_()
+    if isinstance(current_node._parent_, OR):
+        current_node = current_node._parent_
+    prev_parent = current_node._parent_
+    new_conditions_root = OR(current_node, new_branch)
+    new_branch._node_.weight = RDREdge.Alternative
+    new_conditions_root._parent_ = prev_parent
+    if isinstance(prev_parent, BinaryOperator):
+        prev_parent.right = new_conditions_root
+    return new_conditions_root.right

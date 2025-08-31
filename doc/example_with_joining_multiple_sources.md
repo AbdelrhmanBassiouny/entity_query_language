@@ -9,7 +9,7 @@ This allows for a minimal query description that only contains the high level lo
 ## Example Usage
 
 ```python
-from entity_query_language import entity, let, an, And, in_, set_of
+from entity_query_language import entity, let, an, and_, in_, set_of
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -23,8 +23,8 @@ class Body:
 class Connection:
     parent: Body
     child: Body
-    
-    
+
+
 @dataclass
 class Prismatic(Connection):
     ...
@@ -40,6 +40,7 @@ class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
+
 
 # Create the world with its bodies and connections
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
@@ -58,8 +59,8 @@ drawer_kinematic_tree = (parent_container, prismatic_connection, drawer_body, fi
 
 # Write the query body
 result = an(set_of(drawer_kinematic_tree,
-                   And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
-                       drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                   and_(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                        drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                    )
             ).evaluate()
 results = list(result)

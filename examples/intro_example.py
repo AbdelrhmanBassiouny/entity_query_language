@@ -1,5 +1,5 @@
-from entity_query_language import entity, an, let, And, contains, the, MultipleSolutionFound, Or, Not, in_, set_of, \
-    SymbolicRule, symbol
+from entity_query_language import entity, an, let, and_, contains, the, MultipleSolutionFound, or_, not_, in_, set_of, \
+    symbolic_mode, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -30,8 +30,8 @@ class World:
 world = World(1, [Body("Body1"), Body("Body2")])
 
 results_generator = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                              And(contains(body.name, "2"), body.name.startswith("Body"))
-                       )).evaluate()
+                              and_(contains(body.name, "2"), body.name.startswith("Body"))
+                              )).evaluate()
 results = list(results_generator)
 assert len(results) == 1
 assert results[0].name == "Body2"
@@ -47,9 +47,9 @@ except MultipleSolutionFound:
 
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
 result = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                   And(Or(body.name.startswith("C"), body.name.endswith("1")),
-                       Or(body.name.startswith("H"), body.name.endswith("1"))
-                       )
+                   and_(or_(body.name.startswith("C"), body.name.endswith("1")),
+                        or_(body.name.startswith("H"), body.name.endswith("1"))
+                        )
                    )
             ).evaluate()
 results = list(result)
@@ -58,9 +58,9 @@ assert results[0].name == "Container1" and results[1].name == "Handle1"
 
 
 result = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                   Not(And(Or(body.name.startswith("C"), body.name.endswith("1")),
-                       Or(body.name.startswith("H"), body.name.endswith("1"))
-                       ))
+                   not_(and_(or_(body.name.startswith("C"), body.name.endswith("1")),
+                            or_(body.name.startswith("H"), body.name.endswith("1"))
+                            ))
                    )
             ).evaluate()
 results = list(result)
@@ -70,7 +70,7 @@ assert results[0].name == "Container2" and results[1].name == "Handle2"
 world2 = World(2, [Body("Container3"), Body("Handle3"), Body("Handle2")])
 
 result = an(entity(body := let("body", type_=Body, domain=world2.bodies),
-                   And(body.name.startswith('H'), in_(body, world.bodies))
+                   and_(body.name.startswith('H'), in_(body, world.bodies))
                    )
             ).evaluate()
 results = list(result)
@@ -122,8 +122,8 @@ handle = let("handle", type_=Body, domain=world.bodies)
 
 drawer_kinematic_tree = (parent_container, prismatic_connection, drawer_body, fixed_connection, handle)
 result = an(set_of(drawer_kinematic_tree,
-                   And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
-                       drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                   and_(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                        drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                    )
             ).evaluate()
 results = list(result)
@@ -134,10 +134,10 @@ assert results[0][handle].name == "Handle2"
 
 
 # Write the query body
-with SymbolicRule():
+with symbolic_mode():
     result = an(entity(Drawer(handle=handle, body=drawer_body),
-                       And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
-                           drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                       and_(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                        )
                 ).evaluate()
 results = list(result)

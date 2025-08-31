@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from typing_extensions import List, Optional
 
-from entity_query_language.symbolic import symbol
+from entity_query_language import symbol
 
 
 @dataclass(unsafe_hash=True)

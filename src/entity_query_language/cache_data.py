@@ -63,11 +63,11 @@ class CacheTime:
         self.values[name] += seconds
 
 
-_cache_enter_count = CacheCount()
-_cache_search_count = CacheCount()
-_cache_match_count = CacheCount()
-_cache_lookup_time = CacheTime()
-_cache_update_time = CacheTime()
+cache_enter_count = CacheCount()
+cache_search_count = CacheCount()
+cache_match_count = CacheCount()
+cache_lookup_time = CacheTime()
+cache_update_time = CacheTime()
 
 # Runtime switch to enable/disable caching paths
 _caching_enabled = contextvars.ContextVar("caching_enabled", default=True)
@@ -110,11 +110,11 @@ def cache_profile_report() -> Dict[str, Dict[str, float]]:
     :rtype: Dict[str, Dict[str, float]]
     """
     return {
-        "enter_count": dict(_cache_enter_count.values),
-        "search_count": dict(_cache_search_count.values),
-        "match_count": dict(_cache_match_count.values),
-        "lookup_time_seconds": dict(_cache_lookup_time.values),
-        "update_time_seconds": dict(_cache_update_time.values),
+        "enter_count": dict(cache_enter_count.values),
+        "search_count": dict(cache_search_count.values),
+        "match_count": dict(cache_match_count.values),
+        "lookup_time_seconds": dict(cache_lookup_time.values),
+        "update_time_seconds": dict(cache_update_time.values),
     }
 
 

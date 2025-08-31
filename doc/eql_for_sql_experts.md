@@ -13,7 +13,7 @@ This guide maps familiar SQL ideas (SELECT, WHERE, JOIN, EXISTS/IN, boolean logi
 - FROM aliasing → let(name, type_, domain): declare placeholders (think table aliases) and their data source.
 - SELECT one column/entity → entity(selected_var, ...conditions): choose which variable to return.
 - SELECT multiple columns → set_of((var1, var2, ...), ...conditions): return a tuple of variables.
-- WHERE predicates → And(...), Or(...), Not(...), and Python methods (e.g., startswith), plus contains/in_.
+- WHERE predicates → and_(...), or_(...), not_(...), and Python methods (e.g., startswith), plus contains/in_.
 - JOIN (INNER) → express relationships with equality between placeholders/attributes; EQL joins implicitly.
 - IN / EXISTS → in_(x, collection) or contains(collection, x); presence is implicit by using a placeholder.
 - Enforce exactly one row → the(...).evaluate(): raises if multiple matches; an(...) allows many.
@@ -83,26 +83,29 @@ WHERE body.name LIKE 'Body%'
 EQL
 
 ```python
-from entity_query_language import entity, an, let, And
+from entity_query_language import entity, an, let, and_
 from dataclasses import dataclass
 from typing_extensions import List
+
 
 @dataclass(unsafe_hash=True)
 class Body:
     name: str
+
 
 @dataclass(eq=False)
 class World:
     id_: int
     bodies: List[Body]
 
+
 world = World(1, [Body("Body1"), Body("Body2")])
 
 body = let("body", Body, domain=world.bodies)
 results_generator = an(entity(body,
-              And(body.name.startswith("Body"),
-                  body.name.endswith("2"))
-              )).evaluate()
+                              and_(body.name.startswith("Body"),
+                                   body.name.endswith("2"))
+                              )).evaluate()
 results = list(results_generator)
 ```
 
@@ -166,32 +169,38 @@ JOIN bodies AS handle ON handle.id = fixed_connection.child_id;
 EQL
 
 ```python
-from entity_query_language import entity, an, let, And, set_of
+from entity_query_language import entity, an, let, and_, set_of
 from dataclasses import dataclass, field
 from typing_extensions import List
+
 
 @dataclass
 class Body:
     name: str
+
 
 @dataclass
 class Connection:
     parent: Body
     child: Body
 
+
 @dataclass
 class Prismatic(Connection):
     ...
 
+
 @dataclass
 class Fixed(Connection):
     ...
+
 
 @dataclass
 class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
+
 
 # Construct a small world
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
@@ -202,17 +211,17 @@ world.connections = [c1_c2, c2_h2]
 # Declare placeholders (FROM with aliases)
 parent_container = let("parent_container", Body, domain=world.bodies)
 prismatic_connection = let("prismatic_connection", Prismatic, domain=world.connections)
-drawer_body  = let("drawer_body", Body, domain=world.bodies)
-fixed_connection  = let("fixed_connection", Fixed, domain=world.connections)
-handle  = let("handle", Body, domain=world.bodies)
+drawer_body = let("drawer_body", Body, domain=world.bodies)
+fixed_connection = let("fixed_connection", Fixed, domain=world.connections)
+handle = let("handle", Body, domain=world.bodies)
 
 # SELECT (parent_container, prismatic_connection, drawer_body, fixed_connection, handle) WHERE relationships hold
 results_generator = an(set_of((parent_container, prismatic_connection, drawer_body, fixed_connection, handle),
-             And(parent_container == prismatic_connection.parent,
-                 drawer_body == prismatic_connection.child,
-                 drawer_body == fixed_connection.parent,
-                 handle == fixed_connection.child)
-             )).evaluate()
+                              and_(parent_container == prismatic_connection.parent,
+                                   drawer_body == prismatic_connection.child,
+                                   drawer_body == fixed_connection.parent,
+                                   handle == fixed_connection.child)
+                              )).evaluate()
 results = list(results_generator)
 ```
 
@@ -264,36 +273,42 @@ This is analogous to a query where you expect a single-row result (e.g., by prim
 
 ## Rule-based inference (beyond SQL)
 
-EQL can construct new objects from matched patterns using SymbolicRule and @symbol. Conceptually, this is more like
+EQL can construct new objects from matched patterns using symbolic_mode and @symbol. Conceptually, this is more like
 rule-based reasoning than SQL aggregation. See the Inference example for full context.
 
 ```python
-from entity_query_language import entity, an, let, And, SymbolicRule, symbol
+from entity_query_language import entity, an, let, and_, symbolic_mode, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
+
 
 @dataclass
 class Body:
     name: str
+
 
 @dataclass
 class Connection:
     parent: Body
     child: Body
 
+
 @dataclass
 class Prismatic(Connection):
     ...
 
+
 @dataclass
 class Fixed(Connection):
     ...
+
 
 @dataclass
 class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
+
 
 # Build a small world
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
@@ -308,17 +323,20 @@ drawer_body = let("drawer_body", Body, domain=world.bodies)
 fixed_connection = let("fixed_connection", Fixed, domain=world.connections)
 handle = let("handle", Body, domain=world.bodies)
 
+
 @symbol
 @dataclass
 class Drawer:
     handle: Body
     body: Body
 
-with SymbolicRule():
+
+with symbolic_mode():
     results_generator = an(entity(Drawer(handle=handle, body=drawer_body),
-                  And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
-                      drawer_body == fixed_connection.parent, handle == fixed_connection.child)
-                  )).evaluate()
+                                  and_(parent_container == prismatic_connection.parent,
+                                       drawer_body == prismatic_connection.child,
+                                       drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                                  )).evaluate()
 results = list(results_generator)
 assert results and results[0].body.name == "Container2" and results[0].handle.name == "Handle2"
 ```
@@ -327,7 +345,7 @@ assert results and results[0].body.name == "Container2" and results[0].handle.na
 ## Tips for SQL users
 
 - Think: placeholders (let) are your table aliases, and their domain is your FROM source (Python collections).
-- Build predicates using And/Or/Not, equality between attributes, and common Python string/collection methods.
+- Build predicates using and_/or_/not_, equality between attributes, and common Python string/collection methods.
 - Default “join” is whatever satisfies your equality constraints — you don’t spell JOIN explicitly.
 - Materialize results with list(...). The evaluator yields a generator so you can stream or iterate.
 - For returning multiple columns, use set_of with a tuple of placeholders.

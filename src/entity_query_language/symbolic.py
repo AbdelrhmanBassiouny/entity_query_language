@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import inspect
+
 """
 Core symbolic expression system used to build and evaluate entity queries.
 
@@ -14,74 +17,34 @@ from functools import lru_cache
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
-from typing_extensions import dataclass_transform, List, Tuple, Callable
+from typing_extensions import List, Tuple, Callable
 
-from .cache_data import _cache_enter_count, _cache_search_count, _cache_match_count, _cache_lookup_time, \
-    _cache_update_time, is_caching_enabled, SeenSet, IndexedCache
+from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
+    IndexedCache
 from .enums import RDREdge
 from .failures import MultipleSolutionFound
-from .utils import make_list, IDGenerator, is_iterable, render_tree
+from .utils import make_list, IDGenerator, is_iterable, render_tree, generate_combinations
 from .hashed_data import HashedValue, HashedIterable
-import time
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
 
 
 def _set_symbolic_mode(value: bool):
+    """
+    Set whether symbolic construction mode is active.
+
+    :param value: True to enable symbolic mode, False to disable it.
+    """
     _symbolic_mode.set(value)
 
 
 def in_symbolic_mode():
+    """
+    Check whether symbolic construction mode is currently active.
+
+    :returns: True if symbolic mode is enabled, otherwise False.
+    """
     return _symbolic_mode.get()
-
-
-@dataclass
-class SymbolicRule:
-    """
-    Context manager to temporarily enable symbolic construction mode.
-
-    Within the context, calling classes decorated with ``@symbol`` produces
-    symbolic Variables instead of real instances.
-
-    :ivar query: Optional symbolic expression to also enter/exit as a context.
-    """
-    query: Optional[SymbolicExpression] = None
-
-    def __enter__(self):
-        if self.query is not None:
-            self.query.__enter__()
-        _set_symbolic_mode(True)
-        return self  # optional, depending on whether you want to assign `as` variable
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.query is not None:
-            self.query.__exit__(exc_type, exc_val, exc_tb)
-        _set_symbolic_mode(False)
-
-
-@dataclass_transform()
-def symbol(cls):
-    """
-    Class decorator that makes a class construct symbolic Variables when inside
-    a SymbolicRule context.
-
-    When symbolic mode is active, calling the class returns a Variable bound to
-    either a provided domain or to deferred keyword domain sources.
-
-    :param cls: The class to decorate.
-    :return: The same class with a patched ``__new__``.
-    """
-    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
-
-    def symbolic_new(symbolic_cls, *args, **kwargs):
-        if in_symbolic_mode():
-            if len(args) > 0:
-                return Variable(args[0], symbolic_cls, _domain_=args[1])
-            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
-        return orig_new(symbolic_cls)
-
-    cls.__new__ = symbolic_new
-    return cls
 
 
 T = TypeVar("T")
@@ -271,7 +234,7 @@ class SymbolicExpression(Generic[T], ABC):
 
     def __enter__(self):
         node = self
-        if isinstance(node, (ResultQuantifier, Entity)):
+        if isinstance(node, (ResultQuantifier, QueryObjectDescriptor)):
             node = node._conditions_root_
         SymbolicExpression._symbolic_expression_stack_.append(node)
         return self
@@ -310,10 +273,6 @@ class Source(SymbolicExpression[T]):
     def _name_(self) -> str:
         return self._name__
 
-    @property
-    def _source_(self) -> Source:
-        return self._node_.leaves[0]._expression_
-
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
         return self._value_
 
@@ -326,6 +285,11 @@ class Source(SymbolicExpression[T]):
 
 @dataclass(eq=False)
 class SourceAttribute(Source):
+    """
+    Attribute projection on a Source value.
+
+    Created when accessing an attribute of a Source's underlying value.
+    """
     _child_: Source = field(kw_only=True)
 
     @property
@@ -335,6 +299,12 @@ class SourceAttribute(Source):
 
 @dataclass(eq=False)
 class SourceCall(Source):
+    """
+    Call result of invoking a callable Source value.
+
+    Represents ``source(args, kwargs)`` in the expression tree and carries
+    the call arguments for naming/visualization.
+    """
     _child_: Source
     _args_: Tuple[Any, ...] = field(default_factory=tuple)
     _kwargs_: Dict[str, Any] = field(default_factory=dict)
@@ -579,10 +549,6 @@ class HasDomain(SymbolicExpression, ABC):
                 self._domain_ = HashedIterable([HashedValue(self._domain_)])
         super().__post_init__()
 
-    @property
-    def _source_(self) -> HasDomain:
-        return self._node_.leaves[0]._expression_
-
     def __iter__(self):
         yield from self._domain_
 
@@ -652,7 +618,7 @@ class DomainFilter(HasDomain, ABC):
 
 @dataclass(eq=False)
 class HasType(DomainFilter):
-    _type_: Tuple[Type,...]
+    _type_: Tuple[Type, ...]
 
     @property
     def _name_(self):
@@ -672,7 +638,7 @@ class HasType(DomainFilter):
 @dataclass(eq=False)
 class Variable(HasDomain):
     _name__: str
-    _type_: Type
+    _type_: Union[Type, Callable[[Any], Any]]
     _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
     _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
 
@@ -696,23 +662,13 @@ class Variable(HasDomain):
         """
         sources = sources or HashedIterable()
         if self._id_ in sources:
-            yield from (sources[self._id_],)
+            yield sources[self._id_]
         elif not self._domain_:
-            def domain_gen():
-                cls_kwargs = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else v for k, v in
-                              self._cls_kwargs_.items()}
-                symbolic_vars = []
-                for k, v in self._cls_kwargs_.items():
-                    if isinstance(v, HasDomain):
-                        symbolic_vars.append(v)
-                while True:
-                    try:
-                        instance = self._type_(**{k: next(v).value if k in symbolic_vars else v.value
-                                                  for k, v in cls_kwargs.items()})
-                        yield HashedValue(instance)
-                    except StopIteration:
-                        break
-            yield from domain_gen()
+            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else HashedValue([v])
+                                 for k, v in self._cls_kwargs_.items()}
+            for kwargs in generate_combinations(kwargs_generators):
+                instance = self._type_(**{k: v.value for k, v in kwargs.items()})
+                yield HashedValue(instance)
         else:
             yield from self
 
@@ -734,7 +690,7 @@ class Variable(HasDomain):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        variables =  [self]
+        variables = [self]
         if self._cls_kwargs_:
             for v in self._cls_kwargs_.values():
                 if isinstance(v, HasDomain):
@@ -744,6 +700,69 @@ class Variable(HasDomain):
     def __repr__(self):
         return (f"Symbolic({self._type_.__name__}("
                 f"{', '.join(f'{k}={v!r}' for k, v in self._cls_kwargs_.items())}))")
+
+
+@dataclass(eq=False)
+class Predicate(SymbolicExpression):
+    """
+    A symbolic expression that represents a predicate function applied to symbolic variables.
+    """
+    _function_: Callable[[Any], Any]
+    _args_: Tuple[Any, ...] = field(default_factory=tuple)
+    _kwargs_: Dict[str, Any] = field(default_factory=dict)
+    _child_vars_: Dict[str, HasDomain] = field(default_factory=dict)
+    _invert_: bool = field(init=False, default=False)
+
+    def __post_init__(self):
+        if type(self) is Predicate:
+            self._child_ = None
+        function_arg_names = [pname for pname, p in inspect.signature(self._function_).parameters.items()
+                              if p.default == inspect.Parameter.empty]
+        self._kwargs_.update(dict(zip(function_arg_names, self._args_)))
+        if not all(name in self._kwargs_ for name in function_arg_names):
+            raise ValueError(f"The number of arguments of the predicate function {self._function_.__name__} "
+                             f"does not match the number of provided arguments.")
+        if self._kwargs_:
+            for k, v in self._kwargs_.items():
+                self._update_child_vars_(v, name=k)
+        super().__post_init__()
+        self._update_children_(*self._child_vars_.values())
+
+    def _update_child_vars_(self, source: Any, name: Optional[str] = None):
+        if not isinstance(source, HasDomain):
+            source = Variable._from_domain_(source, name=name)
+        self._child_vars_[name] = source
+
+    @property
+    def _name_(self):
+        return f"{self._function_.__name__}({','.join(f'{k}={v._name_}' for k, v in self._child_vars_.items())})"
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        variables = []
+        for k, v in self._child_vars_.items():
+            variables.extend(v._all_variable_instances_)
+        return variables
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
+            -> Iterable[Union[HashedIterable, HashedValue]]:
+        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
+        for kwargs in generate_combinations(kwargs_generators):
+            function_output = self._function_(**{k: v.value for k, v in kwargs.items()})
+            function_value = HashedValue(function_output)
+            if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
+                if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
+                    self._is_false_ = False
+                else:
+                    self._is_false_ = True
+                if self._yield_when_false_ or not self._is_false_:
+                    values = {self._child_vars_[k]._parent_variable_._id_:
+                                  self._child_vars_[k]._parent_variable_._domain_[v.id_]
+                              for k, v in kwargs.items()}
+                    yield HashedIterable(values=values)
+            else:
+                yield function_value
 
 
 @dataclass(eq=False)
@@ -757,15 +776,8 @@ class DomainMapping(HasDomain, ABC):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return [next(iter(self._unique_variables_)).value]
-
-    @property
-    @lru_cache(maxsize=None)
-    def _unique_variables_(self) -> HashedIterable[Variable]:
-        child = self._child_
-        while not isinstance(child, Variable):
-            child = child._child_
-        return HashedIterable(values={child._id_: HashedValue(child)})
+        return self._child_._all_variable_instances_ if not isinstance(self._child_, Variable) \
+            else [self._child_]
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
@@ -860,15 +872,15 @@ class BinaryOperator(ConstrainingOperator, ABC):
         for values, is_false in cache.retrieve(variables_sources):
             entered = True
             self._is_false_ = is_false
-            _cache_match_count.values[self._node_.name] += 1
+            cache_match_count.values[self._node_.name] += 1
             output = HashedIterable(values=values)
             if is_false and self.is_duplicate_output(output):
                 continue
             yield output
         if not entered:
-            _cache_match_count.values[self._node_.name] += 1
-        _cache_enter_count.values[self._node_.name] = cache.enter_count
-        _cache_search_count.values[self._node_.name] = cache.search_count
+            cache_match_count.values[self._node_.name] += 1
+        cache_enter_count.values[self._node_.name] = cache.enter_count
+        cache_search_count.values[self._node_.name] = cache.search_count
 
     def is_duplicate_output(self, output: HashedIterable) -> bool:
         required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
@@ -933,6 +945,7 @@ class Comparator(BinaryOperator):
             case operator.contains:
                 def not_contains(a, b):
                     return not operator.contains(a, b)
+
                 self.operation = not_contains if self._invert_ else self.operation
             case _:
                 raise ValueError(f"Unsupported operation: {self.operation.__name__}")
@@ -1060,6 +1073,12 @@ class AND(LogicalOperator):
 
 @dataclass(eq=False)
 class ConclusionSelector(LogicalOperator, ABC):
+    """
+    Base class for logical operators that may carry and select conclusions.
+
+    Tracks whether certain conclusion-combinations were already produced so
+    they are not duplicated across truth branches.
+    """
     concluded_before: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
                                                   init=False)
 
@@ -1075,20 +1094,14 @@ class ConclusionSelector(LogicalOperator, ABC):
             self.concluded_before[not self._is_false_].add(required_output)
 
 
-def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
-    """
-    Exclude results that match the given conditions.
-    """
-    new_branch = chained_logic(AND, *conditions)
-    prev_parent = SymbolicExpression._current_parent_()._parent_
-    new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
-    new_branch._node_.weight = RDREdge.Refinement
-    new_conditions_root._parent_ = prev_parent
-    return new_conditions_root.right
-
-
 @dataclass(eq=False)
 class ExceptIf(ConclusionSelector):
+    """
+    Conditional branch that yields left unless the right side produces values.
+
+    This encodes an "except if" behavior: when the right condition matches,
+    the left branch's conclusions/outputs are excluded; otherwise, left flows through.
+    """
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
@@ -1142,23 +1155,6 @@ class ExceptIf(ConclusionSelector):
                 self._conclusion_.clear()
 
 
-def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
-    """
-    Exclude results that match the given conditions.
-    """
-    new_branch = chained_logic(AND, *conditions)
-    current_node = SymbolicExpression._current_parent_()
-    if isinstance(current_node._parent_, OR):
-        current_node = current_node._parent_
-    prev_parent = current_node._parent_
-    new_conditions_root = OR(current_node, new_branch)
-    new_branch._node_.weight = RDREdge.Alternative
-    new_conditions_root._parent_ = prev_parent
-    if isinstance(prev_parent, BinaryOperator):
-        prev_parent.right = new_conditions_root
-    return new_conditions_root.right
-
-
 @dataclass(eq=False)
 class OR(ConclusionSelector):
     """
@@ -1171,7 +1167,8 @@ class OR(ConclusionSelector):
         for child in self.left._descendants_:
             child._yield_when_false_ = True
 
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: Optional[bool] = None):
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
+                                        when_true: Optional[bool] = None):
         if not child:
             child = self.left
         required_vars = HashedIterable()

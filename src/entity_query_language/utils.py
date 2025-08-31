@@ -49,6 +49,12 @@ class IDGenerator:
         return self._counter
 
 
+def generate_combinations(generators_dict):
+    """Yield all combinations of generator values as keyword arguments"""
+    for combination in itertools.product(*generators_dict.values()):
+        yield dict(zip(generators_dict.keys(), combination))
+
+
 def filter_data(data, selected_indices):
     data = iter(data)
     prev = -1

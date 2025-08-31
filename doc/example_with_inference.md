@@ -12,7 +12,7 @@ constructor. This is only possible in the `SymbolicMode` to avoid side effects.
 ## Example Usage
 
 ```python
-from entity_query_language import entity, let, an, And, in_, set_of, SymbolicRule, symbol
+from entity_query_language import entity, let, an, and_, in_, set_of, symbolic_mode, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -67,10 +67,10 @@ fixed_connection = let("fixed_connection", type_=Fixed, domain=world.connections
 handle = let("handle", type_=Body, domain=world.bodies)
 
 # Write the query body
-with SymbolicRule():
+with symbolic_mode():
     result = an(entity(Drawer(handle=handle, body=drawer_body),
-                       And(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
-                           drawer_body == fixed_connection.parent, handle == fixed_connection.child)
+                       and_(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                            drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                        )
                 ).evaluate()
 results = list(result)

@@ -6,13 +6,14 @@ alternatives (mutually exclusive branches). It shows how to:
 - Add a refined exception (more specific case) that overrides the base when a further condition is met;
 - Add alternatives that apply under different conditions.
 
-We will construct objects symbolically using SymbolicRule and Add, with let placeholders to describe relationships.
+We will construct objects symbolically using symbolic_rule and Add, with let placeholders to describe relationships.
 
 ## Example Usage
 
 ```python
-from entity_query_language import entity, an, let, And
-from entity_query_language.symbolic import SymbolicRule, Add, refinement, alternative, symbol
+from entity_query_language import entity, an, let, and_, symbolic_mode, symbol
+from entity_query_language.symbolic import Add
+from entity_query_language.entity import refinement, alternative
 from dataclasses import dataclass, field
 from typing_extensions import List
 
@@ -103,7 +104,7 @@ query = an(entity(views,
                   handle == fixed_connection.child))
 
 # --- Build the rule tree
-with SymbolicRule(query):
+with symbolic_mode(query):
     # Base conclusion: if a fixed connection exists between body and handle,
     # we consider it a Drawer by default.
     Add(views, Drawer(handle=handle, container=body))
