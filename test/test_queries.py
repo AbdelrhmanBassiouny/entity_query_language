@@ -1,13 +1,10 @@
 import pytest
 
-from entity_query_language import and_, or_, not_, contains, in_, symbolic_mode
-from entity_query_language.entity import an, entity, set_of, let, the, or_, refinement, alternative, predicate
+from entity_query_language import and_, not_, contains, in_, symbolic_mode
+from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
+from entity_query_language.entity import an, entity, set_of, let, the, or_, predicate
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
-    cache_lookup_time, cache_update_time, enable_caching, disable_caching
-from entity_query_language.utils import render_tree
-from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, Drawer, RevoluteConnection, Door, \
-    View, World, Wardrobe
+from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World
 
 
 # disable_caching()
@@ -111,7 +108,7 @@ def test_generate_with_or_and(handles_and_containers_world):
                              or_(and_(contains(body.name, "Handle"),
                                       contains(body.name, '1'))
                                  , and_(contains(body.name, 'Container'),
-                                       contains(body.name, '1'))
+                                        contains(body.name, '1'))
                                  )
                              )
                       ).evaluate()
@@ -256,10 +253,10 @@ def test_not_and_or(handles_and_containers_world):
     world = handles_and_containers_world
     query = an(entity(body := let("body", type_=Body, domain=world.bodies),
                       not_(or_(and_(contains(body.name, "Handle"),
-                                   contains(body.name, '1'))
-                              , and_(contains(body.name, 'Container'),
                                     contains(body.name, '1'))
-                              ))
+                               , and_(contains(body.name, 'Container'),
+                                      contains(body.name, '1'))
+                               ))
                       )
                )
 
@@ -277,10 +274,10 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
     not_handle1_and_not_container1 = an(entity(body := let("body", type_=Body, domain=world.bodies),
                                                not_(and_(or_(body.name.startswith("Handle"),
-                                                            body.name.endswith('1'))
-                                                        , or_(body.name.startswith('Container'),
-                                                              body.name.endswith('1'))
-                                                        ))
+                                                             body.name.endswith('1'))
+                                                         , or_(body.name.startswith('Container'),
+                                                               body.name.endswith('1'))
+                                                         ))
                                                )
                                         ).evaluate()
 
@@ -303,8 +300,28 @@ def test_generate_with_using_predicate(handles_and_containers_world):
 
     with symbolic_mode():
         query = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                                 is_handle(body_=body)))
+                          is_handle(body_=body)))
 
     handles = list(query.evaluate())
     assert len(handles) == 3, "Should generate at least one handle."
     assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
+
+
+def test_nested_query(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    original_query = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                      contains(body.name, "Handle1") | contains(body.name, 'Handle2')))
+
+    original_query_handles = list(original_query.evaluate())
+    assert len(original_query_handles) == 2, "Should generate at least one handle."
+    assert all(isinstance(h, Handle) for h in original_query_handles), "All generated items should be of type Handle."
+
+    query_part1 = an(entity(body, contains(body.name, "Handle1")))
+    query_part2 = an(entity(body, contains(body.name, "Handle2")))
+    nested_query = an(entity(body, query_part1 | query_part2))
+
+    nested_query._render_tree_()
+
+    nested_query_handles = list(nested_query.evaluate())
+    assert nested_query_handles == original_query_handles, "Should generate same results"

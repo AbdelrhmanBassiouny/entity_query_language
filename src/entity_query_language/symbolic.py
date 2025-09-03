@@ -22,7 +22,7 @@ from typing_extensions import List, Tuple, Callable
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache
 from .enums import RDREdge
-from .failures import MultipleSolutionFound
+from .failures import MultipleSolutionFound, NoSolutionFound
 from .utils import make_list, IDGenerator, is_iterable, render_tree, generate_combinations
 from .hashed_data import HashedValue, HashedIterable
 
@@ -64,7 +64,7 @@ class SymbolicExpression(Generic[T], ABC):
     :ivar _id_: Unique identifier of this node.
     :ivar _node_: Backing anytree.Node for visualization and traversal.
     :ivar _conclusion_: Set of conclusion actions attached to this node.
-    :ivar _yield_when_false_: If True, may yield even when the expression is false.
+    :ivar _yield_when_false__: If True, may yield even when the expression is false.
     :ivar _is_false_: Internal flag indicating evaluation result for this node.
     """
     _child_: Optional[SymbolicExpression] = field(init=False)
@@ -73,7 +73,7 @@ class SymbolicExpression(Generic[T], ABC):
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
     _conclusion_: typing.Set[Conclusion] = field(init=False, default_factory=set)
     _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
-    _yield_when_false_: bool = field(init=False, repr=False, default=False)
+    _yield_when_false__: bool = field(init=False, repr=False, default=False)
     _is_false_: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self):
@@ -111,8 +111,18 @@ class SymbolicExpression(Generic[T], ABC):
         self._node_ = Node(name)
         self._node_._expression_ = self
 
+    @property
+    def _yield_when_false_(self) -> bool:
+        return self._yield_when_false__
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+        for child in self._children_:
+            child._yield_when_false_ = value
+
     @abstractmethod
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Union[HashedIterable, HashedValue]]:
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         """
         Evaluate the symbolic expression and set the operands indices.
         This method should be implemented by subclasses.
@@ -321,41 +331,23 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     Base for quantifiers that return concrete results from entity/set queries
     (e.g., An, The).
     """
-    _child_: Entity[T]
+    _child_: QueryObjectDescriptor[T]
 
     @property
     def _name_(self) -> str:
         return f"{self.__class__.__name__}()"
 
     def evaluate(self) -> Iterable[T]:
-        return self._evaluate__()
+        results_generator = self._evaluate__()
+        if isinstance(self._child_, Entity):
+            return (v.first_value.value for v in results_generator)
+        elif isinstance(self._child_, SetOf):
+            return ({k: v.first_value.value for k, v in var_results.items()} for var_results in results_generator)
+        else:
+            raise NotImplementedError(f"Unknown child type {type(self._child_)}")
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         return HashedIterable()
-
-    def except_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
-        """
-        Exclude results that match the given conditions.
-        """
-        new_branch = chained_logic(AND, *conditions)
-        new_conditions_root = self._conditions_root_ & new_branch
-        new_branch._node_.weight = RDREdge.Refinement
-        new_conditions_root._node_.parent = self._child_._node_
-        return self
-
-    def else_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
-        new_branch = chained_logic(AND, *conditions)
-        new_conditions_root = self._conditions_root_ | new_branch
-        new_branch._node_.weight = RDREdge.Alternative
-        new_conditions_root._node_.parent = self._child_._node_
-        return self
-
-    def also_if(self, *conditions: SymbolicExpression[T]) -> ResultQuantifier[T]:
-        new_branch = chained_logic(OR, *conditions)
-        new_conditions_root = self._conditions_root_ | new_branch
-        new_branch._node_.weight = RDREdge.Next
-        new_conditions_root._node_.parent = self._child_._node_
-        return self
 
     @property
     @lru_cache(maxsize=None)
@@ -405,7 +397,7 @@ class Set(Conclusion[T]):
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
         if self._parent_._id_ not in sources:
-            parent_value = next(iter(self._parent_._evaluate__(sources)))
+            parent_value = next(iter(self._parent_._evaluate__(sources))).first_value
         else:
             parent_value = sources[self._parent_._id_]
         parent_value.value = self.value
@@ -417,9 +409,9 @@ class Add(Conclusion[T]):
     """Add a new value to the domain of a variable."""
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
-        v = next(iter(self.value._evaluate__(sources)))
+        v = next(iter(self.value._evaluate__(sources))).first_value
         self.var._domain_[v.id_] = v
-        sources[self.var._parent_variable_._id_] = v
+        sources[self.var._id_] = v
         return sources
 
 
@@ -429,15 +421,31 @@ class The(ResultQuantifier[T]):
     Quantifier that expects exactly one result; raises MultipleSolutionFound if more.
     """
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
+    @property
+    def _yield_when_false_(self):
+        return self._yield_when_false__
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable[T]:
         sol_gen = self._child_._evaluate__(sources)
-        first_val = next(sol_gen)
-        try:
-            second_val = next(sol_gen)
-        except StopIteration:
-            return first_val
+        result = None
+        for sol in sol_gen:
+            if result is None:
+                result = sol
+            else:
+                raise MultipleSolutionFound(result, sol)
+        if result is None:
+            self._is_false_ = True
+        if self._is_false_:
+            if self._yield_when_false_:
+                return sources
+            else:
+                raise NoSolutionFound(self._child_)
         else:
-            raise MultipleSolutionFound(first_val, second_val)
+            return result
 
 
 @dataclass(eq=False)
@@ -445,7 +453,11 @@ class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        yield from self._child_._evaluate__(sources)
+        values = self._child_._evaluate__(sources)
+        for value in values:
+            self._is_false_ = self._child_._is_false_
+            if self._yield_when_false_ or not self._is_false_:
+                yield value
 
 
 @dataclass(eq=False)
@@ -458,15 +470,16 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
 
     def _evaluate_(self, selected_vars: Iterable[HasDomain],
                    sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        if isinstance(selected_vars, HasDomain):
-            selected_vars = [selected_vars]
         seen_values = set()
         for v in self._child_._evaluate__(sources):
+            self._is_false_ = self._child_._is_false_
+            if self._is_false_ and not self._yield_when_false_:
+                continue
             for conclusion in self._child_._conclusion_:
                 v = conclusion._evaluate__(v)
             for var in selected_vars:
                 if var._id_ not in v:
-                    v[var._id_] = next(var._evaluate__(v))
+                    v[var._id_] = next(var._evaluate__(v)).first_value
             v = HashedIterable(values={var._id_: v[var._id_] for var in selected_vars})
             if v not in seen_values:
                 seen_values.add(v)
@@ -501,7 +514,7 @@ class SetOf(QueryObjectDescriptor[T]):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Dict[HasDomain, Any]]:
         sol_gen = self._evaluate_(self.selected_variables_, sources)
         for sol in sol_gen:
-            yield {var: sol[var._id_].value for var in self.selected_variables_ if var._id_ in sol}
+            yield {var: next(var._evaluate__(sol)) for var in self.selected_variables_}
 
 
 @dataclass(eq=False)
@@ -509,7 +522,7 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable_: T
+    selected_variable_: HasDomain[T]
 
     @property
     def _name_(self) -> str:
@@ -524,13 +537,14 @@ class Entity(QueryObjectDescriptor[T]):
         return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        sol_gen = self._evaluate_(self.selected_variable_)
+        sol_gen = self._evaluate_([self.selected_variable_], sources)
         for sol in sol_gen:
-            yield sol[self.selected_variable_._id_].value
+            if self._yield_when_false_ or not self._is_false_:
+                yield from self.selected_variable_._evaluate__(sol)
 
 
 @dataclass(eq=False)
-class HasDomain(SymbolicExpression, ABC):
+class HasDomain(SymbolicExpression[T], ABC):
     _domain_: HashedIterable[Any] = field(default=None, init=False)
     _domain_sources_: Optional[List[Union[HasDomain, Source]]] = field(default_factory=list, init=False)
     _child_: Optional[HasDomain] = field(init=False)
@@ -550,7 +564,8 @@ class HasDomain(SymbolicExpression, ABC):
         super().__post_init__()
 
     def __iter__(self):
-        yield from self._domain_
+        for v in self._domain_:
+            yield HashedIterable(values={self._id_: HashedValue(v)})
 
     def __getattr__(self, name):
         return Attribute(self, name)
@@ -592,7 +607,7 @@ class DomainFilter(HasDomain, ABC):
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
         if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
-            yield from map(lambda v: HashedIterable(values={self._parent_variable_._id_: v}),
+            yield from map(lambda v: HashedIterable(values={self._id_: v}),
                            filter(self._filter_func_, child_val))
         else:
             yield from filter(self._filter_func_, child_val)
@@ -656,19 +671,19 @@ class Variable(HasDomain):
             self._domain_sources_.extend(domain_sources)
             _ = self._update_children_(*domain_sources)
 
-    def _evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedValue]:
+    def _evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedIterable]:
         """
         A variable does not need to evaluate anything by default.
         """
         sources = sources or HashedIterable()
         if self._id_ in sources:
-            yield sources[self._id_]
+            yield HashedIterable(values={self._id_: sources[self._id_]})
         elif not self._domain_:
             kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else HashedValue([v])
                                  for k, v in self._cls_kwargs_.items()}
             for kwargs in generate_combinations(kwargs_generators):
-                instance = self._type_(**{k: v.value for k, v in kwargs.items()})
-                yield HashedValue(instance)
+                instance = self._type_(**{k: v.first_value.value for k, v in kwargs.items()})
+                yield HashedIterable(values={self._id_: HashedValue(instance)})
         else:
             yield from self
 
@@ -749,7 +764,7 @@ class Predicate(SymbolicExpression):
             -> Iterable[Union[HashedIterable, HashedValue]]:
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         for kwargs in generate_combinations(kwargs_generators):
-            function_output = self._function_(**{k: v.value for k, v in kwargs.items()})
+            function_output = self._function_(**{k: v.first_value.value for k, v in kwargs.items()})
             function_value = HashedValue(function_output)
             if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
                 if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
@@ -758,7 +773,7 @@ class Predicate(SymbolicExpression):
                     self._is_false_ = True
                 if self._yield_when_false_ or not self._is_false_:
                     values = {self._child_vars_[k]._parent_variable_._id_:
-                                  self._child_vars_[k]._parent_variable_._domain_[v.id_]
+                                  self._child_vars_[k]._parent_variable_._domain_[v.first_value.id_]
                               for k, v in kwargs.items()}
                     yield HashedIterable(values=values)
             else:
@@ -780,11 +795,11 @@ class DomainMapping(HasDomain, ABC):
             else [self._child_]
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
-            -> Iterable[Union[HashedIterable, HashedValue]]:
+            -> Iterable[HashedIterable]:
         child_val = self._child_._evaluate__(sources)
         if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
             for child_v in child_val:
-                v = self._apply_mapping_(child_v)
+                v = child_v.map(self._apply_mapping_).first_value
                 if (not self._invert_ and v.value) or (self._invert_ and not v.value):
                     self._is_false_ = False
                 else:
@@ -792,10 +807,10 @@ class DomainMapping(HasDomain, ABC):
                 if self._yield_when_false_ or not self._is_false_:
                     yield HashedIterable(values={self._parent_variable_._id_: self._parent_variable_._domain_[v.id_]})
         else:
-            yield from (self._apply_mapping_(v) for v in child_val)
+            yield from (v.map(self._apply_mapping_) for v in child_val)
 
     def __iter__(self):
-        yield from (self._apply_mapping_(v) for v in self._child_)
+        yield from (v.map(self._apply_mapping_) for v in self._child_)
 
     @abstractmethod
     def _apply_mapping_(self, value: HashedValue) -> HashedValue:
@@ -976,9 +991,11 @@ class Comparator(BinaryOperator):
 
         first_values = order_operand_map['first']._evaluate__(sources)
         for first_value in first_values:
+            first_value = first_value.first_value
             operand_value_map = {order_operand_map['first']: first_value}
             second_values = order_operand_map['second']._evaluate__(sources)
             for second_value in second_values:
+                second_value = second_value.first_value
                 operand_value_map[order_operand_map['second']] = second_value
                 res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
@@ -1164,8 +1181,6 @@ class OR(ConclusionSelector):
     def __post_init__(self):
         super().__post_init__()
         self.left._yield_when_false_ = True
-        for child in self.left._descendants_:
-            child._yield_when_false_ = True
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
                                         when_true: Optional[bool] = None):
@@ -1229,7 +1244,13 @@ def Not(operand: Any) -> SymbolicExpression:
     """
     if not isinstance(operand, SymbolicExpression):
         operand = Variable._from_domain_(operand)
-    if isinstance(operand, AND):
+    if isinstance(operand, The):
+        operand = An(Not(operand._child_))
+    elif isinstance(operand, Entity):
+        operand = operand.__class__(Not(operand._child_), operand.selected_variable_)
+    elif isinstance(operand, SetOf):
+        operand = operand.__class__(Not(operand._child_), operand.selected_variables_)
+    elif isinstance(operand, AND):
         operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
         for child in operand.left._descendants_:

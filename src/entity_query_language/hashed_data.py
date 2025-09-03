@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Generic, Optional, Iterable, Dict, Any
+from typing import Generic, Optional, Iterable, Dict, Any, Callable
 
 from typing_extensions import TypeVar
 
@@ -29,7 +29,10 @@ class HashedValue(Generic[T]):
         Initialize the identifier from the wrapped value when not provided.
         """
         if self.id_ is None:
-            if hasattr(self.value, "_id_"):
+            if isinstance(self.value, HashedValue):
+                self.id_ = self.value.id_
+                self.value = self.value.value
+            elif hasattr(self.value, "_id_"):
                 self.id_ = self.value._id_
             else:
                 self.id_ = id(self.value)
@@ -60,8 +63,7 @@ class HashedIterable(Generic[T]):
 
     def __post_init__(self):
         if self.iterable and not isinstance(self.iterable, HashedIterable):
-            self.iterable = (HashedValue(id_=k, value=v) if not isinstance(v, HashedValue) else v
-                             for k, v in enumerate(self.iterable))
+            self.iterable = (HashedValue(v) if not isinstance(v, HashedValue) else v for v in self.iterable)
 
     def get(self, key: int, default: Any) -> HashedValue[T]:
         return self.values.get(key, default)
@@ -76,6 +78,18 @@ class HashedIterable(Generic[T]):
     def update(self, iterable: Iterable[Any]):
         for v in iterable:
             self.add(v)
+
+    def map(self, func: Callable[[HashedValue], HashedValue]) -> HashedIterable[T]:
+        return HashedIterable(map(func, self))
+
+    @property
+    def first_value(self) -> HashedValue:
+        """
+        Return the first value in the iterable.
+        """
+        for v in self:
+            return v
+        raise ValueError("Tried to get a value from empty iterable")
 
     def __iter__(self):
         """
@@ -100,7 +114,6 @@ class HashedIterable(Generic[T]):
         return HashedIterable(values=common_values)
 
     def difference(self, other):
-        common_keys = self.values.keys() & other.values.keys()
         left_keys = self.values.keys() - other.values.keys()
         values = {k: self.values[k] for k in left_keys}
         return HashedIterable(values=values)
@@ -121,8 +134,16 @@ class HashedIterable(Generic[T]):
 
         :param id_: The id of the HashedValue to get.
         :return: The HashedValue with the given id.
+        :raises KeyError: If the given id is unknown.
         """
-        return self.values[id_]
+        try:
+            return self.values[id_]
+        except KeyError:
+            for v in self.iterable:
+                self.values[v.id_] = v
+                if v.id_ == id_:
+                    return v
+            raise KeyError(id_)
 
     def __setitem__(self, id_: int, value: HashedValue[T]):
         """
