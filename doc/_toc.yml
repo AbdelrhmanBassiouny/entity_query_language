@@ -8,6 +8,7 @@ chapters:
 - file: example_with_and_or
 - file: example_with_not
 - file: example_with_joining_multiple_sources
+- file: example_with_nested_queries
 - file: example_with_inference
 - file: example_with_rule_tree
 - file: example_with_predicate
