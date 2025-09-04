@@ -810,7 +810,7 @@ class Predicate(SymbolicExpression):
                               for k, v in kwargs.items()}
                     yield HashedIterable(values=values)
             else:
-                yield function_value
+                yield HashedIterable(values={self._id_: function_value})
 
 
 @dataclass(eq=False)
