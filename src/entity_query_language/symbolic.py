@@ -587,7 +587,7 @@ class HasDomain(SymbolicExpression[T], ABC):
             if isinstance(self._domain_, Source):
                 self._domain_ = HashedIterable(self._domain_._evaluate__().value)
             elif isinstance(self._domain_, HasDomain):
-                self._domain_ = HashedIterable(self._domain_._evaluate__())
+                self._domain_ = HashedIterable((v.first_value for v in self._domain_._evaluate__()))
             elif is_iterable(self._domain_):
                 self._domain_ = HashedIterable(self._domain_)
             else:
@@ -637,14 +637,12 @@ class DomainFilter(HasDomain, ABC):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
-        if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
-            yield from map(lambda v: HashedIterable(values={self._id_: v}),
-                           filter(self._filter_func_, child_val))
-        else:
-            yield from filter(self._filter_func_, child_val)
+        yield from map(lambda v: HashedIterable(values={self._id_: v}),
+                       filter(self._filter_func_, child_val))
 
     def __iter__(self):
-        yield from filter(self._filter_func_, self._child_._evaluate__())
+        yield from map(lambda v: HashedIterable(values={self._id_: v}),
+            filter(self._filter_func_, self._child_._evaluate__()))
 
     def _filter_func_(self, v: Any) -> bool:
         """
