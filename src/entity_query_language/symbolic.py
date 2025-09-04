@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+from . import logger
+
 """
 Core symbolic expression system used to build and evaluate entity queries.
 
@@ -151,8 +153,8 @@ class SymbolicExpression(Generic[T], ABC):
         if value is not None and hasattr(value, '_child_') and value._child_ is not None:
             value._child_ = self
 
-    def _render_tree_(self):
-        render_tree(self._root_._node_, True, view=True)
+    def _render_tree_(self, use_dot: bool = True, show_in_console: bool = False):
+        render_tree(self._root_._node_, use_dot, view=use_dot, show_in_console=show_in_console)
 
     @property
     def _conditions_root_(self) -> SymbolicExpression:
@@ -337,14 +339,12 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     def _name_(self) -> str:
         return f"{self.__class__.__name__}()"
 
-    def evaluate(self) -> Iterable[T]:
-        results_generator = self._evaluate__()
-        if isinstance(self._child_, Entity):
-            return (v.first_value.value for v in results_generator)
-        elif isinstance(self._child_, SetOf):
-            return ({k: v.first_value.value for k, v in var_results.items()} for var_results in results_generator)
-        else:
-            raise NotImplementedError(f"Unknown child type {type(self._child_)}")
+    @abstractmethod
+    def evaluate(self) -> Union[Iterable[T], T, Iterable[Dict[SymbolicExpression[T], T]]]:
+        """
+        This is the method called by the user to evaluate the full query.
+        """
+        ...
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         return HashedIterable()
@@ -353,6 +353,165 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
         return self._child_._all_variable_instances_
+
+    def _process_result_(self, result) -> Union[T, Dict[SymbolicExpression[T], T]]:
+        if isinstance(self._child_, Entity):
+            return result.first_value.value
+        elif isinstance(self._child_, SetOf):
+            return {self._id_expression_map_[var_id]: v.value for var_id, v in result.values.items()}
+        else:
+            raise NotImplementedError(f"Unknown child type {type(self._child_)}")
+
+
+@dataclass(eq=False)
+class The(ResultQuantifier[T]):
+    """
+    Quantifier that expects exactly one result; raises MultipleSolutionFound if more.
+    """
+
+    @property
+    def _yield_when_false_(self):
+        return self._yield_when_false__
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+
+    def evaluate(self) -> Union[Iterable[T], T, Dict[SymbolicExpression[T], T]]:
+        result = self._evaluate__()
+        return self._process_result_(result)
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable[T]:
+        sol_gen = self._child_._evaluate__(sources)
+        result = None
+        for sol in sol_gen:
+            if result is None:
+                result = sol
+            else:
+                raise MultipleSolutionFound(result, sol)
+        if result is None:
+            self._is_false_ = True
+        if self._is_false_:
+            if self._yield_when_false_:
+                return sources
+            else:
+                raise NoSolutionFound(self._child_)
+        else:
+            return result
+
+
+@dataclass(eq=False)
+class An(ResultQuantifier[T]):
+    """Quantifier that yields all matching results one by one."""
+
+    def evaluate(self) -> Union[Iterable[T], Iterable[Dict[SymbolicExpression[T], T]]]:
+        results = self._evaluate__()
+        yield from map(self._process_result_, results)
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+        values = self._child_._evaluate__(sources)
+        for value in values:
+            self._is_false_ = self._child_._is_false_
+            if self._yield_when_false_ or not self._is_false_:
+                yield value
+
+
+@dataclass(eq=False)
+class QueryObjectDescriptor(SymbolicExpression[T], ABC):
+    """
+    Describes the queried object(s), could be a query over a single variable or a set of variables,
+    also describes the condition(s)/properties of the queried object(s).
+    """
+    _child_: SymbolicExpression[T]
+
+    def _evaluate_(self, selected_vars: Iterable[HasDomain],
+                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+        seen_values = set()
+        for v in self._child_._evaluate__(sources):
+            self._is_false_ = self._child_._is_false_
+            if self._is_false_ and not self._yield_when_false_:
+                continue
+            for conclusion in self._child_._conclusion_:
+                v = conclusion._evaluate__(v)
+            unbound_variables = HashedIterable()
+            for var in selected_vars:
+                unbound_variables.update(var._unique_variables_.difference(v))
+            unbound_variables_with_domain = HashedIterable()
+            for var in unbound_variables:
+                if var.value._domain_ and len(var.value._domain_.values) > 1:
+                    unbound_variables_with_domain.add(var)
+            if unbound_variables_with_domain:
+                logger.warning(f"\nCartesian Product: "
+                               f"The following variables are not bound "
+                               f"{unbound_variables_with_domain.unwrapped_values}"
+                               f"\nfor the query descriptor {self._name_}")
+            var_val_gen = {var: var._evaluate__(v) for var in selected_vars}
+            for sol in generate_combinations(var_val_gen):
+                v = HashedIterable(values={var._id_: sol[var].first_value for var in selected_vars})
+                if v not in seen_values:
+                    seen_values.add(v)
+                    yield v
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return self._child_._all_variable_instances_
+
+    def __repr__(self):
+        return self._name_
+
+
+@dataclass(eq=False)
+class SetOf(QueryObjectDescriptor[T]):
+    """
+    A query over a set of variables.
+    """
+    selected_variables_: Iterable[HasDomain]
+
+    @property
+    def _name_(self) -> str:
+        return f"SetOf({', '.join(var._name_ for var in self.selected_variables_)})"
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        required_vars = HashedIterable()
+        required_vars.update(self.selected_variables_)
+        for var in self.selected_variables_:
+            required_vars.update(var._unique_variables_)
+        for conc in child._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable[HasDomain]]:
+        sol_gen = self._evaluate_(self.selected_variables_, sources)
+        for sol in sol_gen:
+            yield HashedIterable(values={var._id_: next(var._evaluate__(sol)).first_value
+                                         for var in self.selected_variables_ if var._id_ in sol})
+
+
+@dataclass(eq=False)
+class Entity(QueryObjectDescriptor[T]):
+    """
+    A query over a single variable.
+    """
+    selected_variable_: HasDomain[T]
+
+    @property
+    def _name_(self) -> str:
+        return f"Entity({self.selected_variable_._name_})"
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        required_vars = HashedIterable()
+        required_vars.add(self.selected_variable_)
+        required_vars.update(self.selected_variable_._unique_variables_)
+        for conc in child._conclusion_:
+            required_vars.update(conc._unique_variables_)
+        return required_vars
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+        sol_gen = self._evaluate_([self.selected_variable_], sources)
+        for sol in sol_gen:
+            if self._yield_when_false_ or not self._is_false_:
+                yield from self.selected_variable_._evaluate__(sol)
 
 
 @dataclass(eq=False)
@@ -413,134 +572,6 @@ class Add(Conclusion[T]):
         self.var._domain_[v.id_] = v
         sources[self.var._id_] = v
         return sources
-
-
-@dataclass(eq=False)
-class The(ResultQuantifier[T]):
-    """
-    Quantifier that expects exactly one result; raises MultipleSolutionFound if more.
-    """
-
-    @property
-    def _yield_when_false_(self):
-        return self._yield_when_false__
-
-    @_yield_when_false_.setter
-    def _yield_when_false_(self, value):
-        self._yield_when_false__ = value
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable[T]:
-        sol_gen = self._child_._evaluate__(sources)
-        result = None
-        for sol in sol_gen:
-            if result is None:
-                result = sol
-            else:
-                raise MultipleSolutionFound(result, sol)
-        if result is None:
-            self._is_false_ = True
-        if self._is_false_:
-            if self._yield_when_false_:
-                return sources
-            else:
-                raise NoSolutionFound(self._child_)
-        else:
-            return result
-
-
-@dataclass(eq=False)
-class An(ResultQuantifier[T]):
-    """Quantifier that yields all matching results one by one."""
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        values = self._child_._evaluate__(sources)
-        for value in values:
-            self._is_false_ = self._child_._is_false_
-            if self._yield_when_false_ or not self._is_false_:
-                yield value
-
-
-@dataclass(eq=False)
-class QueryObjectDescriptor(SymbolicExpression[T], ABC):
-    """
-    Describes the queried object(s), could be a query over a single variable or a set of variables,
-    also describes the condition(s)/properties of the queried object(s).
-    """
-    _child_: SymbolicExpression[T]
-
-    def _evaluate_(self, selected_vars: Iterable[HasDomain],
-                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        seen_values = set()
-        for v in self._child_._evaluate__(sources):
-            self._is_false_ = self._child_._is_false_
-            if self._is_false_ and not self._yield_when_false_:
-                continue
-            for conclusion in self._child_._conclusion_:
-                v = conclusion._evaluate__(v)
-            for var in selected_vars:
-                if var._id_ not in v:
-                    v[var._id_] = next(var._evaluate__(v)).first_value
-            v = HashedIterable(values={var._id_: v[var._id_] for var in selected_vars})
-            if v not in seen_values:
-                seen_values.add(v)
-                yield v
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        return self._child_._all_variable_instances_
-
-
-@dataclass(eq=False)
-class SetOf(QueryObjectDescriptor[T]):
-    """
-    A query over a set of variables.
-    """
-    selected_variables_: Iterable[HasDomain]
-
-    @property
-    def _name_(self) -> str:
-        return f"SetOf({', '.join(var._name_ for var in self.selected_variables_)})"
-
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
-        required_vars = HashedIterable()
-        required_vars.update(self.selected_variables_)
-        for var in self.selected_variables_:
-            required_vars.update(var._unique_variables_)
-        for conc in child._conclusion_:
-            required_vars.update(conc._unique_variables_)
-        return required_vars
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[Dict[HasDomain, Any]]:
-        sol_gen = self._evaluate_(self.selected_variables_, sources)
-        for sol in sol_gen:
-            yield {var: next(var._evaluate__(sol)) for var in self.selected_variables_}
-
-
-@dataclass(eq=False)
-class Entity(QueryObjectDescriptor[T]):
-    """
-    A query over a single variable.
-    """
-    selected_variable_: HasDomain[T]
-
-    @property
-    def _name_(self) -> str:
-        return f"Entity({self.selected_variable_._name_})"
-
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
-        required_vars = HashedIterable()
-        required_vars.add(self.selected_variable_)
-        required_vars.update(self.selected_variable_._unique_variables_)
-        for conc in child._conclusion_:
-            required_vars.update(conc._unique_variables_)
-        return required_vars
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        sol_gen = self._evaluate_([self.selected_variable_], sources)
-        for sol in sol_gen:
-            if self._yield_when_false_ or not self._is_false_:
-                yield from self.selected_variable_._evaluate__(sol)
 
 
 @dataclass(eq=False)
@@ -713,6 +744,8 @@ class Variable(HasDomain):
         return variables
 
     def __repr__(self):
+        if self._name_:
+            return self._name_
         return (f"Symbolic({self._type_.__name__}("
                 f"{', '.join(f'{k}={v!r}' for k, v in self._cls_kwargs_.items())}))")
 
@@ -1244,8 +1277,11 @@ def Not(operand: Any) -> SymbolicExpression:
     """
     if not isinstance(operand, SymbolicExpression):
         operand = Variable._from_domain_(operand)
-    if isinstance(operand, The):
-        operand = An(Not(operand._child_))
+    if isinstance(operand, ResultQuantifier):
+        raise NotImplementedError(f"Symbolic NOT operations on {ResultQuantifier} operands "
+                                  f"are not allowed, you can negate the conditions or {QueryObjectDescriptor}"
+                                  f" instead as negating quantifiers is most likely not what you want"
+                                  f" as it is ambiguous.")
     elif isinstance(operand, Entity):
         operand = operand.__class__(Not(operand._child_), operand.selected_variable_)
     elif isinstance(operand, SetOf):

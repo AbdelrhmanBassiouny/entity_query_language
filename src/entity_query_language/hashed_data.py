@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Generic, Optional, Iterable, Dict, Any, Callable
+from typing import Generic, Optional, Iterable, Dict, Any, Callable, List
 
 from typing_extensions import TypeVar
 
@@ -81,6 +81,10 @@ class HashedIterable(Generic[T]):
 
     def map(self, func: Callable[[HashedValue], HashedValue]) -> HashedIterable[T]:
         return HashedIterable(map(func, self))
+
+    @property
+    def unwrapped_values(self) -> List[T]:
+        return [v.value for v in self.values.values()]
 
     @property
     def first_value(self) -> HashedValue:
