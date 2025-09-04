@@ -3,12 +3,6 @@
 Nested queries let you compose complex logic by building sub-queries and combining them using logical operators, just
 like simple expressions. This makes it easy to reuse and structure query logic.
 
-## Example 1: Nested query with OR
-
-In this example, we show that a nested query composed with OR is equivalent to writing the OR conditions directly.
-
-## Example 2: Nested query with multiple sources
-
 Here we demonstrate composing nested sub-queries over multiple sources. The two nested parts each constrain different
 subsets of variables, and combining them yields the same result as the flat version.
 
