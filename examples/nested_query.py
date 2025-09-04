@@ -32,11 +32,11 @@ class World:
 
 
 # Sample data
-bodies = [Body("Container1"), Body("Handle1"), Body("Container2"), Body("Handle2")]
+bodies = [Body("Container1"), Body("Handle1"), Body("Container2"), Body("Handle2"), Body("Container3")]
 fixed_1 = FixedConnection(parent=bodies[0], child=bodies[1])  # Container1 -> Handle1
-prismatic_1 = PrismaticConnection(parent=bodies[2], child=bodies[0])  # Container2 -> Container1
+prismatic_1 = PrismaticConnection(parent=bodies[4], child=bodies[0])  # Container2 -> Container1
 fixed_2 = FixedConnection(parent=bodies[2], child=bodies[3])  # Container2 -> Handle2
-prismatic_2 = PrismaticConnection(parent=bodies[0], child=bodies[2])  # Container1 -> Container2
+prismatic_2 = PrismaticConnection(parent=bodies[4], child=bodies[2])  # Container1 -> Container2
 world = World(1, bodies=bodies, connections=[fixed_1, prismatic_1, fixed_2, prismatic_2])
 
 # Variables
