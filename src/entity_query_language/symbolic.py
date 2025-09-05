@@ -575,6 +575,69 @@ class Add(Conclusion[T]):
 
 
 @dataclass(eq=False)
+class Predicate(SymbolicExpression):
+    """
+    A symbolic expression that represents a predicate function applied to symbolic variables.
+    """
+    _function_: Callable[[Any], Any]
+    _args_: Tuple[Any, ...] = field(default_factory=tuple)
+    _kwargs_: Dict[str, Any] = field(default_factory=dict)
+    _child_vars_: Dict[str, HasDomain] = field(default_factory=dict)
+    _invert_: bool = field(init=False, default=False)
+
+    def __post_init__(self):
+        if type(self) is Predicate:
+            self._child_ = None
+        function_arg_names = [pname for pname, p in inspect.signature(self._function_).parameters.items()
+                              if p.default == inspect.Parameter.empty]
+        self._kwargs_.update(dict(zip(function_arg_names, self._args_)))
+        if not all(name in self._kwargs_ for name in function_arg_names):
+            raise ValueError(f"The number of arguments of the predicate function {self._function_.__name__} "
+                             f"does not match the number of provided arguments.")
+        if self._kwargs_:
+            for k, v in self._kwargs_.items():
+                self._update_child_vars_(v, name=k)
+        super().__post_init__()
+        self._update_children_(*self._child_vars_.values())
+
+    def _update_child_vars_(self, source: Any, name: Optional[str] = None):
+        if not isinstance(source, HasDomain):
+            source = Variable._from_domain_(source, name=name)
+        self._child_vars_[name] = source
+
+    @property
+    def _name_(self):
+        return f"{self._function_.__name__}({','.join(f'{k}={v._name_}' for k, v in self._child_vars_.items())})"
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        variables = []
+        for k, v in self._child_vars_.items():
+            variables.extend(v._all_variable_instances_)
+        return variables
+
+    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
+            -> Iterable[Union[HashedIterable, HashedValue]]:
+        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
+        for kwargs in generate_combinations(kwargs_generators):
+            function_output = self._function_(**{k: v.first_value.value for k, v in kwargs.items()})
+            function_value = HashedValue(function_output)
+            if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
+                if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
+                    self._is_false_ = False
+                else:
+                    self._is_false_ = True
+                if self._yield_when_false_ or not self._is_false_:
+                    values = {self._child_vars_[k]._parent_variable_._id_:
+                                  self._child_vars_[k]._parent_variable_._domain_[v.first_value.id_]
+                              for k, v in kwargs.items()}
+                    yield HashedIterable(values=values)
+            else:
+                yield HashedIterable(values={self._id_: function_value})
+
+
+@dataclass(eq=False)
 class HasDomain(SymbolicExpression[T], ABC):
     _domain_: HashedIterable[Any] = field(default=None, init=False)
     _domain_sources_: Optional[List[Union[HasDomain, Source]]] = field(default_factory=list, init=False)
@@ -753,69 +816,6 @@ class Variable(HasDomain):
 
 
 @dataclass(eq=False)
-class Predicate(SymbolicExpression):
-    """
-    A symbolic expression that represents a predicate function applied to symbolic variables.
-    """
-    _function_: Callable[[Any], Any]
-    _args_: Tuple[Any, ...] = field(default_factory=tuple)
-    _kwargs_: Dict[str, Any] = field(default_factory=dict)
-    _child_vars_: Dict[str, HasDomain] = field(default_factory=dict)
-    _invert_: bool = field(init=False, default=False)
-
-    def __post_init__(self):
-        if type(self) is Predicate:
-            self._child_ = None
-        function_arg_names = [pname for pname, p in inspect.signature(self._function_).parameters.items()
-                              if p.default == inspect.Parameter.empty]
-        self._kwargs_.update(dict(zip(function_arg_names, self._args_)))
-        if not all(name in self._kwargs_ for name in function_arg_names):
-            raise ValueError(f"The number of arguments of the predicate function {self._function_.__name__} "
-                             f"does not match the number of provided arguments.")
-        if self._kwargs_:
-            for k, v in self._kwargs_.items():
-                self._update_child_vars_(v, name=k)
-        super().__post_init__()
-        self._update_children_(*self._child_vars_.values())
-
-    def _update_child_vars_(self, source: Any, name: Optional[str] = None):
-        if not isinstance(source, HasDomain):
-            source = Variable._from_domain_(source, name=name)
-        self._child_vars_[name] = source
-
-    @property
-    def _name_(self):
-        return f"{self._function_.__name__}({','.join(f'{k}={v._name_}' for k, v in self._child_vars_.items())})"
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        variables = []
-        for k, v in self._child_vars_.items():
-            variables.extend(v._all_variable_instances_)
-        return variables
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
-            -> Iterable[Union[HashedIterable, HashedValue]]:
-        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
-        for kwargs in generate_combinations(kwargs_generators):
-            function_output = self._function_(**{k: v.first_value.value for k, v in kwargs.items()})
-            function_value = HashedValue(function_output)
-            if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
-                if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
-                    self._is_false_ = False
-                else:
-                    self._is_false_ = True
-                if self._yield_when_false_ or not self._is_false_:
-                    values = {self._child_vars_[k]._parent_variable_._id_:
-                                  self._child_vars_[k]._parent_variable_._domain_[v.first_value.id_]
-                              for k, v in kwargs.items()}
-                    yield HashedIterable(values=values)
-            else:
-                yield HashedIterable(values={self._id_: function_value})
-
-
-@dataclass(eq=False)
 class DomainMapping(HasDomain, ABC):
     """
     A symbolic expression the maps the domain of symbolic variables.
@@ -890,17 +890,7 @@ class Call(DomainMapping):
 
 
 @dataclass(eq=False)
-class ConstrainingOperator(SymbolicExpression, ABC):
-    """
-    An abstract base class for operators that can constrain symbolic expressions.
-    This is used to ensure that the operator can be applied to symbolic expressions
-    and that it can constrain the results based on indices.
-    """
-    ...
-
-
-@dataclass(eq=False)
-class BinaryOperator(ConstrainingOperator, ABC):
+class BinaryOperator(SymbolicExpression, ABC):
     """
     A base class for binary operators that can be used to combine symbolic expressions.
     """
