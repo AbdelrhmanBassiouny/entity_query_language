@@ -58,8 +58,7 @@ class Predicate(SymbolicExpression):
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         for kwargs in generate_combinations(kwargs_generators):
             function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
-            function_value = HashedValue(function_output)
-            if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
+            if (not self._invert_ and function_output) or (self._invert_ and not function_output):
                 self._is_false_ = False
             else:
                 self._is_false_ = True
@@ -70,5 +69,5 @@ class Predicate(SymbolicExpression):
                     parent_var = var._parent_variable_
                     if parent_var:
                         values[parent_var._id_] = parent_var._domain_[v[var._id_].id_]
-                values[self._id_] = function_value
+                values[self._id_] = HashedValue(function_output)
                 yield values
