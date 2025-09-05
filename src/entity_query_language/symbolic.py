@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import copy
+
 from . import logger
 
 """
@@ -124,7 +126,7 @@ class SymbolicExpression(Generic[T], ABC):
             child._yield_when_false_ = value
 
     @abstractmethod
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Evaluate the symbolic expression and set the operands indices.
         This method should be implemented by subclasses.
@@ -215,7 +217,7 @@ class SymbolicExpression(Generic[T], ABC):
     @property
     @lru_cache(maxsize=None)
     def _parent_variable_(self) -> Variable:
-        return self._all_variable_instances_[0]
+        return self._all_variable_instances_[0] if self._all_variable_instances_ else None
 
     @property
     @lru_cache(maxsize=None)
@@ -285,7 +287,7 @@ class Source(SymbolicExpression[T]):
     def _name_(self) -> str:
         return self._name__
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> T:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> T:
         return self._value_
 
     def __getattr__(self, name):
@@ -354,11 +356,11 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     def _all_variable_instances_(self) -> List[Variable]:
         return self._child_._all_variable_instances_
 
-    def _process_result_(self, result) -> Union[T, Dict[SymbolicExpression[T], T]]:
+    def _process_result_(self, result: Dict[int, HashedValue]) -> Union[T, Dict[SymbolicExpression[T], T]]:
         if isinstance(self._child_, Entity):
-            return result.first_value.value
+            return result[self._child_.selected_variable_._id_].value
         elif isinstance(self._child_, SetOf):
-            return {self._id_expression_map_[var_id]: v.value for var_id, v in result.values.items()}
+            return {self._id_expression_map_[var_id]: v.value for var_id, v in result.items()}
         else:
             raise NotImplementedError(f"Unknown child type {type(self._child_)}")
 
@@ -381,7 +383,7 @@ class The(ResultQuantifier[T]):
         result = self._evaluate__()
         return self._process_result_(result)
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable[T]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         sol_gen = self._child_._evaluate__(sources)
         result = None
         for sol in sol_gen:
@@ -408,7 +410,7 @@ class An(ResultQuantifier[T]):
         results = self._evaluate__()
         yield from map(self._process_result_, results)
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         values = self._child_._evaluate__(sources)
         for value in values:
             self._is_false_ = self._child_._is_false_
@@ -425,12 +427,12 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
     _child_: Optional[SymbolicExpression[T]] = field(default=None)
 
     def _evaluate_(self, selected_vars: Optional[Iterable[HasDomain]] = None,
-                   sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        seen_values = set()
+                   sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        seen_values = SeenSet()
         if self._child_:
             child_values = self._child_._evaluate__(sources)
         else:
-            child_values = [HashedIterable()]
+            child_values = [{}]
         for v in child_values:
             if self._child_:
                 self._is_false_ = self._child_._is_false_
@@ -443,16 +445,16 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             if selected_vars:
                 var_val_gen = {var: var._evaluate__(v) for var in selected_vars}
                 for sol in generate_combinations(var_val_gen):
-                    v = HashedIterable(values={var._id_: sol[var].first_value for var in selected_vars})
-                    if v not in seen_values:
+                    v = {var._id_: sol[var][var._id_] for var in selected_vars}
+                    if not seen_values.check(v):
                         seen_values.add(v)
                         yield v
             else:
-                if v not in seen_values:
+                if not seen_values.check(v):
                     seen_values.add(v)
                     yield v
 
-    def _warn_on_unbound_variables_(self, sources: HashedIterable, selected_vars: Iterable[HasDomain]):
+    def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue], selected_vars: Iterable[HasDomain]):
         """
         Warn the user if there are unbound variables in the query descriptor, because this will result in a cartesian
         product join operation.
@@ -462,7 +464,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
         """
         unbound_variables = HashedIterable()
         for var in selected_vars:
-            unbound_variables.update(var._unique_variables_.difference(sources))
+            unbound_variables.update(var._unique_variables_.difference(HashedIterable(values=sources)))
         unbound_variables_with_domain = HashedIterable()
         for var in unbound_variables:
             if var.value._domain_ and len(var.value._domain_.values) > 1:
@@ -506,12 +508,12 @@ class SetOf(QueryObjectDescriptor[T]):
                 required_vars.update(conc._unique_variables_)
         return required_vars
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable[HasDomain]]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         sol_gen = self._evaluate_(self.selected_variables_, sources)
         for sol in sol_gen:
             if self.selected_variables_:
-                yield HashedIterable(values={var._id_: next(var._evaluate__(sol)).first_value
-                                             for var in self.selected_variables_ if var._id_ in sol})
+                yield {var._id_: next(var._evaluate__(sol))[var._id_]
+                       for var in self.selected_variables_ if var._id_ in sol}
             else:
                 yield sol
 
@@ -537,7 +539,7 @@ class Entity(QueryObjectDescriptor[T]):
                 required_vars.update(conc._unique_variables_)
         return required_vars
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         selected_variables = [self.selected_variable_] if self.selected_variable_ else []
         sol_gen = self._evaluate_(selected_variables, sources)
         for sol in sol_gen:
@@ -561,7 +563,7 @@ class HasDomain(SymbolicExpression[T], ABC):
             if isinstance(self._domain_, Source):
                 self._domain_ = HashedIterable(self._domain_._evaluate__().value)
             elif isinstance(self._domain_, HasDomain):
-                self._domain_ = HashedIterable((v.first_value for v in self._domain_._evaluate__()))
+                self._domain_ = HashedIterable((next(iter(v.values())) for v in self._domain_._evaluate__()))
             elif is_iterable(self._domain_):
                 self._domain_ = HashedIterable(self._domain_)
             else:
@@ -570,7 +572,7 @@ class HasDomain(SymbolicExpression[T], ABC):
 
     def __iter__(self):
         for v in self._domain_:
-            yield HashedIterable(values={self._id_: HashedValue(v)})
+            yield {self._id_: HashedValue(v)}
 
     def __getattr__(self, name):
         return Attribute(self, name)
@@ -608,15 +610,15 @@ class DomainFilter(HasDomain, ABC):
     _child_: Union[HasDomain, Source]
     _invert_: bool = field(init=False, default=False)
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
-            -> Iterable[Union[HashedIterable, HashedValue]]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
+            -> Iterable[Dict[int, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
-        if self._conditions_root_ is self or isinstance(self._parent_, LogicalOperator):
-            id_ = self._parent_variable_._id_
+        if self._parent_variable_:
+            yield from map(lambda v: {self._parent_variable_._id_: v, self._id_: v},
+                           filter(self._filter_func_, child_val))
         else:
-            id_ = self._id_
-        yield from map(lambda v: HashedIterable(values={id_: v}),
-                       filter(self._filter_func_, child_val))
+            yield from map(lambda v: {self._id_: v},
+                           filter(self._filter_func_, child_val))
 
     def __iter__(self):
         yield from map(lambda v: HashedIterable(values={self._id_: v}),
@@ -654,7 +656,7 @@ class HasType(DomainFilter):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return []
+        return self._child_._all_variable_instances_
 
 
 @dataclass(eq=False)
@@ -678,19 +680,19 @@ class Variable(HasDomain):
             self._domain_sources_.extend(domain_sources)
             _ = self._update_children_(*domain_sources)
 
-    def _evaluate__(self, sources: Optional[HashedIterable[Any]] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         A variable does not need to evaluate anything by default.
         """
-        sources = sources or HashedIterable()
+        sources = sources or {}
         if self._id_ in sources:
-            yield HashedIterable(values={self._id_: sources[self._id_]})
+            yield {self._id_: sources[self._id_]}
         elif not self._domain_:
             kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else HashedValue([v])
                                  for k, v in self._cls_kwargs_.items()}
             for kwargs in generate_combinations(kwargs_generators):
-                instance = self._type_(**{k: v.first_value.value for k, v in kwargs.items()})
-                yield HashedIterable(values={self._id_: HashedValue(instance)})
+                instance = self._type_(**{k: v[self._cls_kwargs_[k]._id_].value for k, v in kwargs.items()})
+                yield {self._id_: HashedValue(instance)}
         else:
             yield from self
 
@@ -740,23 +742,25 @@ class DomainMapping(HasDomain, ABC):
         return self._child_._all_variable_instances_ if not isinstance(self._child_, Variable) \
             else [self._child_]
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
-            -> Iterable[HashedIterable]:
-        child_val = self._child_._evaluate__(sources)
-        if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
-            for child_v in child_val:
-                v = child_v.map(self._apply_mapping_).first_value
-                if (not self._invert_ and v.value) or (self._invert_ and not v.value):
-                    self._is_false_ = False
-                else:
-                    self._is_false_ = True
-                if self._yield_when_false_ or not self._is_false_:
-                    yield HashedIterable(values={self._parent_variable_._id_: self._parent_variable_._domain_[v.id_]})
-        else:
-            yield from (v.map(self._apply_mapping_) for v in child_val)
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
+            -> Iterable[Dict[int, HashedValue]]:
+        yield from self._update_domain_(sources)
 
     def __iter__(self):
-        yield from (v.map(self._apply_mapping_) for v in self._child_)
+        yield from self._update_domain_()
+
+    def _update_domain_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        child_val = self._child_._evaluate__(sources)
+        for child_v in child_val:
+            v = self._apply_mapping_(child_v[self._child_._id_])
+            if (not self._invert_ and v.value) or (self._invert_ and not v.value):
+                self._is_false_ = False
+            else:
+                self._is_false_ = True
+            if self._yield_when_false_ or not self._is_false_:
+                child_v[self._id_] = v
+                yield child_v
+
 
     @abstractmethod
     def _apply_mapping_(self, value: HashedValue) -> HashedValue:
@@ -820,11 +824,10 @@ class BinaryOperator(SymbolicExpression, ABC):
     def yield_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None):
         cache = self._cache_ if cache is None else cache
         entered = False
-        for values, is_false in cache.retrieve(variables_sources):
+        for output, is_false in cache.retrieve(variables_sources):
             entered = True
             self._is_false_ = is_false
             cache_match_count.values[self._node_.name] += 1
-            output = HashedIterable(values=values)
             if is_false and self.is_duplicate_output(output):
                 continue
             yield output
@@ -833,22 +836,22 @@ class BinaryOperator(SymbolicExpression, ABC):
         cache_enter_count.values[self._node_.name] = cache.enter_count
         cache_search_count.values[self._node_.name] = cache.search_count
 
-    def is_duplicate_output(self, output: HashedIterable) -> bool:
+    def is_duplicate_output(self, output: Dict[int, HashedValue]) -> bool:
         required_vars = self._parent_._required_variables_from_child_(self, when_true=not self._is_false_)
         if not required_vars:
             return False
-        required_output = {k: v for k, v in output.values.items() if k in required_vars}
+        required_output = {k: v for k, v in output.items() if k in required_vars}
         if self.seen_parent_values[not self._is_false_].check(required_output):
             return True
         else:
             self.seen_parent_values[not self._is_false_].add(required_output)
             return False
 
-    def update_cache(self, values: HashedIterable, cache: Optional[IndexedCache] = None):
+    def update_cache(self, values: Dict[int, HashedValue], cache: Optional[IndexedCache] = None):
         if not is_caching_enabled():
             return
         cache = self._cache_ if cache is None else cache
-        cache.insert({k: v for k, v in values.values.items() if k in cache.keys}, output=self._is_false_)
+        cache.insert({k: v for k, v in values.items() if k in cache.keys}, output=self._is_false_)
 
     @property
     @lru_cache(maxsize=None)
@@ -906,7 +909,7 @@ class Comparator(BinaryOperator):
     def _name_(self):
         return self.operation.__name__
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Compares the left and right symbolic variables using the "operation".
 
@@ -916,34 +919,34 @@ class Comparator(BinaryOperator):
         :return: Yields a HashedIterable mapping a symbolic variable id to a value of that variable, it will contain
          only two values, the left and right symbolic values.
         """
-        sources = sources or HashedIterable()
+        sources = sources or {}
 
         if is_caching_enabled():
-            if self._cache_.check(sources.values):
-                yield from self.yield_from_cache(sources.values)
+            if self._cache_.check(sources):
+                yield from self.yield_from_cache(sources)
                 return
 
         order_operand_map = self.get_operand_order_map(sources)
 
         first_values = order_operand_map['first']._evaluate__(sources)
         for first_value in first_values:
-            first_value = first_value.first_value
-            operand_value_map = {order_operand_map['first']: first_value}
+            operand_value_map = {order_operand_map['first']._id_: first_value[order_operand_map['first']._id_]}
             second_values = order_operand_map['second']._evaluate__(sources)
             for second_value in second_values:
-                second_value = second_value.first_value
-                operand_value_map[order_operand_map['second']] = second_value
+                operand_value_map[order_operand_map['second']._id_] = second_value[order_operand_map['second']._id_]
                 res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
-                    values = self.get_result_domain(operand_value_map)
+                    values = first_value
+                    values.update(second_value)
+                    values.update(operand_value_map)
                     self.update_cache(values)
                     yield values
 
-    def apply_operation(self, operand_values: Dict[HasDomain, HashedValue]):
-        return self.operation(operand_values[self.left].value, operand_values[self.right].value)
+    def apply_operation(self, operand_values: Dict[int, HashedValue]):
+        return self.operation(operand_values[self.left._id_].value, operand_values[self.right._id_].value)
 
-    def get_operand_order_map(self, sources: HashedIterable):
+    def get_operand_order_map(self, sources: Dict[int, HashedValue]):
         if self.right._parent_variable_._id_ in sources:
             return {'first': self.right, 'second': self.left}
         else:
@@ -991,14 +994,14 @@ class AND(LogicalOperator):
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         # init an empty source if none is provided
-        sources = sources or HashedIterable()
+        sources = sources or {}
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
-            left_value = left_value.union(sources)
+            left_value.update(sources)
             if self._yield_when_false_ and self.left._is_false_:
                 self._is_false_ = True
                 if self.is_duplicate_output(left_value):
@@ -1006,8 +1009,8 @@ class AND(LogicalOperator):
                 yield left_value
                 continue
 
-            if is_caching_enabled() and self.right_cache.check(left_value.values):
-                yield from self.yield_from_cache(left_value.values, self.right_cache)
+            if is_caching_enabled() and self.right_cache.check(left_value):
+                yield from self.yield_from_cache(left_value, self.right_cache)
                 continue
 
             # constrain right values by available sources
@@ -1016,7 +1019,8 @@ class AND(LogicalOperator):
             # For the found left value, find all right values,
             # and yield the (left, right) results found.
             for right_value in right_values:
-                output = right_value.union(left_value)
+                output = copy(right_value)
+                output.update(left_value)
                 self._is_false_ = self.right._is_false_
                 if self._is_false_ and self.is_duplicate_output(output):
                     continue
@@ -1055,26 +1059,27 @@ class OR(LogicalOperator):
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Constrain the symbolic expression based on the indices of the operands.
         This method overrides the base class method to handle ElseIf logic.
         """
         # init an empty source if none is provided
-        sources = sources or HashedIterable()
+        sources = sources or {}
 
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
-            left_value = left_value.union(sources)
+            left_value.update(sources)
             if self.left._is_false_:
-                if is_caching_enabled() and self.right_cache.check(left_value.values):
-                    yield from self.yield_from_cache(left_value.values, self.right_cache)
+                if is_caching_enabled() and self.right_cache.check(left_value):
+                    yield from self.yield_from_cache(left_value, self.right_cache)
                     continue
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:
                     self._is_false_ = self.right._is_false_
-                    output = left_value.union(right_value)
+                    output = copy(left_value)
+                    output.update(right_value)
                     if self._is_false_ and not self._yield_when_false_:
                         continue
                     if self._is_false_ and self.is_duplicate_output(output):

@@ -7,7 +7,7 @@ from typing import Dict, Optional, Iterable
 
 from .cache_data import SeenSet, is_caching_enabled
 from .conclusion import Conclusion
-from .hashed_data import HashedIterable
+from .hashed_data import HashedIterable, HashedValue
 from .symbolic import LogicalOperator, SymbolicExpression, OR
 
 
@@ -22,13 +22,13 @@ class ConclusionSelector(LogicalOperator, ABC):
     concluded_before: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
                                                   init=False)
 
-    def update_conclusion(self, output: HashedIterable, conclusions: typing.Set[Conclusion]) -> None:
+    def update_conclusion(self, output: Dict[int, HashedValue], conclusions: typing.Set[Conclusion]) -> None:
         if not conclusions:
             return
         required_vars = HashedIterable()
         for conclusion in conclusions:
             required_vars.update(conclusion._unique_variables_)
-        required_output = {k: v for k, v in output.values.items() if k in required_vars}
+        required_output = {k: v for k, v in output.items() if k in required_vars}
         if not self.concluded_before[not self._is_false_].check(required_output):
             self._conclusion_.update(conclusions)
             self.concluded_before[not self._is_false_].add(required_output)
@@ -65,7 +65,7 @@ class ExceptIf(ConclusionSelector):
             required_vars.update(conc._unique_variables_)
         return required_vars
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Evaluate the ExceptIf condition and yield the results.
         """
@@ -77,17 +77,19 @@ class ExceptIf(ConclusionSelector):
         left_values = self.left._evaluate__(sources)
         for left_value in left_values:
 
-            left_value = left_value.union(sources)
+            left_value.update(sources)
 
-            if is_caching_enabled() and self.right_cache.check(left_value.values):
-                yield from self.yield_from_cache(left_value.values, self.right_cache)
+            if is_caching_enabled() and self.right_cache.check(left_value):
+                yield from self.yield_from_cache(left_value, self.right_cache)
                 continue
 
             right_yielded = False
             for right_value in self.right._evaluate__(left_value):
                 right_yielded = True
                 self._conclusion_.update(self.right._conclusion_)
-                yield left_value.union(right_value)
+                output = left_value.copy()
+                output.update(right_value)
+                yield output
                 self._conclusion_.clear()
             if not right_yielded:
                 self._conclusion_.update(self.left._conclusion_)
@@ -103,7 +105,7 @@ class ElseIf(OR, ConclusionSelector):
     none of the branches are selected.
     """
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         outputs = super()._evaluate__(sources)
         for output in outputs:
             left_is_true = not self.left._is_false_

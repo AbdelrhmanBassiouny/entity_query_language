@@ -79,7 +79,9 @@ class HashedIterable(Generic[T]):
         for v in iterable:
             self.add(v)
 
-    def map(self, func: Callable[[HashedValue], HashedValue]) -> HashedIterable[T]:
+    def map(self, func: Callable[[HashedValue], HashedValue], ids: Optional[List[int]] = None) -> HashedIterable[T]:
+        if ids:
+            func = lambda v: func(v) if v.id_ in ids else v
         return HashedIterable(map(func, self))
 
     @property

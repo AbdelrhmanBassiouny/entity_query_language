@@ -54,10 +54,10 @@ class Predicate(SymbolicExpression):
         return variables
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
-            -> Iterable[Union[HashedIterable, HashedValue]]:
+            -> Iterable[Dict[int, HashedValue]]:
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         for kwargs in generate_combinations(kwargs_generators):
-            function_output = self._function_(**{k: v.first_value.value for k, v in kwargs.items()})
+            function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
             function_value = HashedValue(function_output)
             if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
                 if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
@@ -66,8 +66,8 @@ class Predicate(SymbolicExpression):
                     self._is_false_ = True
                 if self._yield_when_false_ or not self._is_false_:
                     values = {self._child_vars_[k]._parent_variable_._id_:
-                                  self._child_vars_[k]._parent_variable_._domain_[v.first_value.id_]
+                                  self._child_vars_[k]._parent_variable_._domain_[v[self._child_vars_[k]._id_].id_]
                               for k, v in kwargs.items()}
-                    yield HashedIterable(values=values)
+                    yield values
             else:
-                yield HashedIterable(values={self._id_: function_value})
+                yield {self._id_: function_value}

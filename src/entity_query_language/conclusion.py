@@ -3,10 +3,12 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Dict
+
 from typing_extensions import Any, Optional, List
 
 from .enums import RDREdge
-from .hashed_data import HashedIterable
+from .hashed_data import HashedIterable, HashedValue
 from .symbolic import SymbolicExpression, T, HasDomain, Variable
 
 
@@ -50,9 +52,9 @@ class Conclusion(SymbolicExpression[T], ABC):
 class Set(Conclusion[T]):
     """Set the value of a variable in the current solution binding."""
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         if self._parent_._id_ not in sources:
-            parent_value = next(iter(self._parent_._evaluate__(sources))).first_value
+            parent_value = next(iter(self._parent_._evaluate__(sources)))[self._parent_._id_]
         else:
             parent_value = sources[self._parent_._id_]
         parent_value.value = self.value
@@ -63,8 +65,8 @@ class Set(Conclusion[T]):
 class Add(Conclusion[T]):
     """Add a new value to the domain of a variable."""
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
-        v = next(iter(self.value._evaluate__(sources))).first_value
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
+        v = next(iter(self.value._evaluate__(sources)))[self.value._id_]
         self.var._domain_[v.id_] = v
         sources[self.var._id_] = v
         return sources
