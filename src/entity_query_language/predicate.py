@@ -53,7 +53,7 @@ class Predicate(SymbolicExpression):
             variables.extend(v._all_variable_instances_)
         return variables
 
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) \
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         for kwargs in generate_combinations(kwargs_generators):
