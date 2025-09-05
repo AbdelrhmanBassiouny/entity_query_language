@@ -10,6 +10,12 @@ from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnect
 # disable_caching()
 
 
+def test_empty_conditions(handles_and_containers_world):
+    world = handles_and_containers_world
+    query = an(entity(body := let("body", type_=Body, domain=world.bodies)))
+    assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
+
+
 def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
     """
     Test the generation of handles in the HandlesAndContainersWorld.

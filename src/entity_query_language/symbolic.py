@@ -422,35 +422,56 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
     Describes the queried object(s), could be a query over a single variable or a set of variables,
     also describes the condition(s)/properties of the queried object(s).
     """
-    _child_: SymbolicExpression[T]
+    _child_: Optional[SymbolicExpression[T]] = field(default=None)
 
-    def _evaluate_(self, selected_vars: Iterable[HasDomain],
+    def _evaluate_(self, selected_vars: Optional[Iterable[HasDomain]] = None,
                    sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
         seen_values = set()
-        for v in self._child_._evaluate__(sources):
-            self._is_false_ = self._child_._is_false_
+        if self._child_:
+            child_values = self._child_._evaluate__(sources)
+        else:
+            child_values = [HashedIterable()]
+        for v in child_values:
+            if self._child_:
+                self._is_false_ = self._child_._is_false_
             if self._is_false_ and not self._yield_when_false_:
                 continue
-            for conclusion in self._child_._conclusion_:
-                v = conclusion._evaluate__(v)
-            unbound_variables = HashedIterable()
-            for var in selected_vars:
-                unbound_variables.update(var._unique_variables_.difference(v))
-            unbound_variables_with_domain = HashedIterable()
-            for var in unbound_variables:
-                if var.value._domain_ and len(var.value._domain_.values) > 1:
-                    unbound_variables_with_domain.add(var)
-            if unbound_variables_with_domain:
-                logger.warning(f"\nCartesian Product: "
-                               f"The following variables are not bound "
-                               f"{unbound_variables_with_domain.unwrapped_values}"
-                               f"\nfor the query descriptor {self._name_}")
-            var_val_gen = {var: var._evaluate__(v) for var in selected_vars}
-            for sol in generate_combinations(var_val_gen):
-                v = HashedIterable(values={var._id_: sol[var].first_value for var in selected_vars})
+            if self._child_:
+                for conclusion in self._child_._conclusion_:
+                    v = conclusion._evaluate__(v)
+            self._warn_on_unbound_variables(v, selected_vars)
+            if selected_vars:
+                var_val_gen = {var: var._evaluate__(v) for var in selected_vars}
+                for sol in generate_combinations(var_val_gen):
+                    v = HashedIterable(values={var._id_: sol[var].first_value for var in selected_vars})
+                    if v not in seen_values:
+                        seen_values.add(v)
+                        yield v
+            else:
                 if v not in seen_values:
                     seen_values.add(v)
                     yield v
+
+    def _warn_on_unbound_variables(self, sources: HashedIterable, selected_vars: Iterable[HasDomain]):
+        """
+        Warn the user if there are unbound variables in the query descriptor, because this will result in a cartesian
+        product join operation.
+
+        :param sources: The bound values after applying the conditions.
+        :param selected_vars: The variables selected in the query descriptor.
+        """
+        unbound_variables = HashedIterable()
+        for var in selected_vars:
+            unbound_variables.update(var._unique_variables_.difference(sources))
+        unbound_variables_with_domain = HashedIterable()
+        for var in unbound_variables:
+            if var.value._domain_ and len(var.value._domain_.values) > 1:
+                unbound_variables_with_domain.add(var)
+        if unbound_variables_with_domain:
+            logger.warning(f"\nCartesian Product: "
+                           f"The following variables are not bound "
+                           f"{unbound_variables_with_domain.unwrapped_values}"
+                           f"\nfor the query descriptor {self._name_}")
 
     @property
     @lru_cache(maxsize=None)
@@ -466,7 +487,7 @@ class SetOf(QueryObjectDescriptor[T]):
     """
     A query over a set of variables.
     """
-    selected_variables_: Iterable[HasDomain]
+    selected_variables_: Iterable[HasDomain] = field(default_factory=tuple)
 
     @property
     def _name_(self) -> str:
@@ -477,15 +498,19 @@ class SetOf(QueryObjectDescriptor[T]):
         required_vars.update(self.selected_variables_)
         for var in self.selected_variables_:
             required_vars.update(var._unique_variables_)
-        for conc in child._conclusion_:
-            required_vars.update(conc._unique_variables_)
+        if child:
+            for conc in child._conclusion_:
+                required_vars.update(conc._unique_variables_)
         return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable[HasDomain]]:
         sol_gen = self._evaluate_(self.selected_variables_, sources)
         for sol in sol_gen:
-            yield HashedIterable(values={var._id_: next(var._evaluate__(sol)).first_value
-                                         for var in self.selected_variables_ if var._id_ in sol})
+            if self.selected_variables_:
+                yield HashedIterable(values={var._id_: next(var._evaluate__(sol)).first_value
+                                             for var in self.selected_variables_ if var._id_ in sol})
+            else:
+                yield sol
 
 
 @dataclass(eq=False)
@@ -493,7 +518,7 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable_: HasDomain[T]
+    selected_variable_: Optional[HasDomain[T]] = field(default=None)
 
     @property
     def _name_(self) -> str:
@@ -501,17 +526,23 @@ class Entity(QueryObjectDescriptor[T]):
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         required_vars = HashedIterable()
-        required_vars.add(self.selected_variable_)
-        required_vars.update(self.selected_variable_._unique_variables_)
-        for conc in child._conclusion_:
-            required_vars.update(conc._unique_variables_)
+        if self.selected_variable_:
+            required_vars.add(self.selected_variable_)
+            required_vars.update(self.selected_variable_._unique_variables_)
+        if child:
+            for conc in child._conclusion_:
+                required_vars.update(conc._unique_variables_)
         return required_vars
 
     def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[T]:
-        sol_gen = self._evaluate_([self.selected_variable_], sources)
+        selected_variables = [self.selected_variable_] if self.selected_variable_ else []
+        sol_gen = self._evaluate_(selected_variables, sources)
         for sol in sol_gen:
             if self._yield_when_false_ or not self._is_false_:
-                yield from self.selected_variable_._evaluate__(sol)
+                if self.selected_variable_:
+                    yield from self.selected_variable_._evaluate__(sol)
+                else:
+                    yield sol
 
 
 @dataclass(eq=False)

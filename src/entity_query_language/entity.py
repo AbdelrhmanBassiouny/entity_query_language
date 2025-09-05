@@ -52,7 +52,9 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool]) -
     :return: Entity descriptor.
     :rtype: Entity[T]
     """
-    expression = and_(*properties) if len(properties) > 1 else properties[0]
+    expression = None
+    if len(properties) > 0:
+        expression = and_(*properties) if len(properties) > 1 else properties[0]
     return Entity(_child_=expression, selected_variable_=selected_variable)
 
 
