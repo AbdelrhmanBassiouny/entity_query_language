@@ -65,9 +65,6 @@ class Predicate(SymbolicExpression):
             if self._yield_when_false_ or not self._is_false_:
                 values = {}
                 for k, v in kwargs.items():
-                    var = self._child_vars_[k]
-                    parent_var = var._parent_variable_
-                    if parent_var:
-                        values[parent_var._id_] = parent_var._domain_[v[var._id_].id_]
+                    values.update(v)
                 values[self._id_] = HashedValue(function_output)
                 yield values
