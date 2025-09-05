@@ -637,7 +637,11 @@ class DomainFilter(HasDomain, ABC):
     def _evaluate__(self, sources: Optional[HashedIterable] = None) \
             -> Iterable[Union[HashedIterable, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
-        yield from map(lambda v: HashedIterable(values={self._id_: v}),
+        if self._conditions_root_ is self or isinstance(self._parent_, LogicalOperator):
+            id_ = self._parent_variable_._id_
+        else:
+            id_ = self._id_
+        yield from map(lambda v: HashedIterable(values={id_: v}),
                        filter(self._filter_func_, child_val))
 
     def __iter__(self):
