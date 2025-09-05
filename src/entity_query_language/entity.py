@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from functools import wraps
-
-from .enums import RDREdge
 
 """
 User interface (grammar & vocabulary) for entity query language.
@@ -12,10 +9,9 @@ import operator
 
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
-from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, OR, Comparator, \
-    chained_logic, HasDomain, Source, SourceCall, SourceAttribute, HasType, OR, _set_symbolic_mode, in_symbolic_mode, T, \
-    ExceptIf, BinaryOperator, Call, Predicate, Not
-from .utils import render_tree, is_iterable
+from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
+    chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Predicate, Not
+from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
 
@@ -156,28 +152,6 @@ def in_(item, container):
     return Comparator(container, item, operator.contains)
 
 
-@contextmanager
-def symbolic_mode(query: Optional[SymbolicExpression] = None):
-    """
-    Context manager to temporarily enable symbolic construction mode.
-
-    Within the context, calling classes decorated with ``@symbol`` produces
-    symbolic Variables instead of real instances.
-
-    :param query: Optional symbolic expression to also enter/exit as a context.
-    """
-    try:
-        if query is not None:
-            query.__enter__()
-        _set_symbolic_mode(True)
-        yield SymbolicExpression._current_parent_()
-    finally:
-        if query is not None:
-            query.__exit__()
-        _set_symbolic_mode(False)
-
-
-
 @dataclass_transform()
 def symbol(cls):
     """
@@ -222,45 +196,3 @@ def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]
         return function(*args, **kwargs)
 
     return wrapper
-
-
-def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
-    """
-    Add a refinement branch (ExceptIf node with its right the new conditions and its left the base/parent rule/query)
-     to the current condition tree.
-
-    Each provided condition is chained with AND, and the resulting branch is
-    connected via ExceptIf to the current node, representing a refinement/specialization path.
-
-    :param conditions: The refinement conditions. They are chained with AND.
-    :returns: The newly created branch node for further chaining.
-    """
-    new_branch = chained_logic(AND, *conditions)
-    prev_parent = SymbolicExpression._current_parent_()._parent_
-    new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
-    new_branch._node_.weight = RDREdge.Refinement
-    new_conditions_root._parent_ = prev_parent
-    return new_conditions_root.right
-
-
-def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
-    """
-    Add an alternative branch (logical OR) to the current condition tree.
-
-    Each provided condition is chained with AND, and the resulting branch is
-    connected via OR to the current node, representing an alternative path.
-
-    :param conditions: Conditions to chain with AND and attach as an alternative.
-    :returns: The newly created branch node for further chaining.
-    """
-    new_branch = chained_logic(AND, *conditions)
-    current_node = SymbolicExpression._current_parent_()
-    if isinstance(current_node._parent_, OR):
-        current_node = current_node._parent_
-    prev_parent = current_node._parent_
-    new_conditions_root = OR(current_node, new_branch)
-    new_branch._node_.weight = RDREdge.Alternative
-    new_conditions_root._parent_ = prev_parent
-    if isinstance(prev_parent, BinaryOperator):
-        prev_parent.right = new_conditions_root
-    return new_conditions_root.right

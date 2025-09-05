@@ -11,9 +11,7 @@ We will construct objects symbolically using symbolic_rule and Add, with let pla
 ## Example Usage
 
 ```python
-from entity_query_language import entity, an, let, and_, symbolic_mode, symbol
-from entity_query_language.symbolic import Add
-from entity_query_language.entity import refinement, alternative
+from entity_query_language import entity, an, let, and_, symbolic_mode, symbol, refinement, alternative, Add
 from dataclasses import dataclass, field
 from typing_extensions import List
 

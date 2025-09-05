@@ -1,7 +1,8 @@
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
-from entity_query_language import let, symbolic_mode, an, entity, and_, refinement, alternative
-from entity_query_language.symbolic import Add
+from entity_query_language import let, symbolic_mode, an, entity, and_
+from entity_query_language.rule import refinement, alternative
+from entity_query_language.conclusion import Add
 from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
     cache_lookup_time, cache_update_time
 

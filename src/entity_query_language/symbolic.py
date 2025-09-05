@@ -18,15 +18,17 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from anytree import Node
-from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar
+from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar, TYPE_CHECKING
 from typing_extensions import List, Tuple, Callable
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache
-from .enums import RDREdge
 from .failures import MultipleSolutionFound, NoSolutionFound
 from .utils import make_list, IDGenerator, is_iterable, render_tree, generate_combinations
 from .hashed_data import HashedValue, HashedIterable
+
+if TYPE_CHECKING:
+    from .conclusion import Conclusion
 
 _symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
 
@@ -512,66 +514,6 @@ class Entity(QueryObjectDescriptor[T]):
         for sol in sol_gen:
             if self._yield_when_false_ or not self._is_false_:
                 yield from self.selected_variable_._evaluate__(sol)
-
-
-@dataclass(eq=False)
-class Conclusion(SymbolicExpression[T], ABC):
-    """
-    Base for side-effecting/action clauses that adjust outputs (e.g., Set, Add).
-
-    :ivar var: The variable being affected by the conclusion.
-    :ivar value: The value or expression used by the conclusion.
-    """
-    var: HasDomain
-    value: Any
-    _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        self.var, self.value = self._update_children_(self.var, self.value)
-
-        self._node_.weight = RDREdge.Then
-
-        current_parent = SymbolicExpression._current_parent_()
-        if current_parent is None:
-            current_parent = self._conditions_root_
-        self._parent_ = current_parent
-        self._parent_._add_conclusion_(self)
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        return self.var._all_variable_instances_ + self.value._all_variable_instances_
-
-    @property
-    def _name_(self) -> str:
-        value_str = self.value._type_.__name__ if isinstance(self.value, Variable) else str(self.value)
-        return f"{self.__class__.__name__}({self.var._name_}, {value_str})"
-
-
-@dataclass(eq=False)
-class Set(Conclusion[T]):
-    """Set the value of a variable in the current solution binding."""
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
-        if self._parent_._id_ not in sources:
-            parent_value = next(iter(self._parent_._evaluate__(sources))).first_value
-        else:
-            parent_value = sources[self._parent_._id_]
-        parent_value.value = self.value
-        return sources
-
-
-@dataclass(eq=False)
-class Add(Conclusion[T]):
-    """Add a new value to the domain of a variable."""
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> HashedIterable:
-        v = next(iter(self.value._evaluate__(sources))).first_value
-        self.var._domain_[v.id_] = v
-        sources[self.var._id_] = v
-        return sources
 
 
 @dataclass(eq=False)
@@ -1114,91 +1056,7 @@ class AND(LogicalOperator):
 
 
 @dataclass(eq=False)
-class ConclusionSelector(LogicalOperator, ABC):
-    """
-    Base class for logical operators that may carry and select conclusions.
-
-    Tracks whether certain conclusion-combinations were already produced so
-    they are not duplicated across truth branches.
-    """
-    concluded_before: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
-                                                  init=False)
-
-    def update_conclusion(self, output: HashedIterable, conclusions: typing.Set[Conclusion]) -> None:
-        if not conclusions:
-            return
-        required_vars = HashedIterable()
-        for conclusion in conclusions:
-            required_vars.update(conclusion._unique_variables_)
-        required_output = {k: v for k, v in output.values.items() if k in required_vars}
-        if not self.concluded_before[not self._is_false_].check(required_output):
-            self._conclusion_.update(conclusions)
-            self.concluded_before[not self._is_false_].add(required_output)
-
-
-@dataclass(eq=False)
-class ExceptIf(ConclusionSelector):
-    """
-    Conditional branch that yields left unless the right side produces values.
-
-    This encodes an "except if" behavior: when the right condition matches,
-    the left branch's conclusions/outputs are excluded; otherwise, left flows through.
-    """
-
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
-        if not child:
-            child = self.left
-        required_vars = HashedIterable()
-        when_false = not when_true
-        if child is self.left:
-            if when_true:
-                required_vars.update(self.right._unique_variables_)
-            for conc in self.left._conclusion_.union(self.right._conclusion_):
-                required_vars.update(conc._unique_variables_)
-        elif child is self.right:
-            if when_true:
-                for conc in self.right._conclusion_:
-                    required_vars.update(conc._unique_variables_)
-            if when_false and not self.left._is_false_:
-                for conc in self.left._conclusion_:
-                    required_vars.update(conc._unique_variables_)
-        required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
-        for conc in self._conclusion_:
-            required_vars.update(conc._unique_variables_)
-        return required_vars
-
-    def _evaluate__(self, sources: Optional[HashedIterable] = None) -> Iterable[HashedIterable]:
-        """
-        Evaluate the ExceptIf condition and yield the results.
-        """
-
-        # init an empty source if none is provided
-        sources = sources or HashedIterable()
-
-        # constrain left values by available sources
-        left_values = self.left._evaluate__(sources)
-        for left_value in left_values:
-
-            left_value = left_value.union(sources)
-
-            if is_caching_enabled() and self.right_cache.check(left_value.values):
-                yield from self.yield_from_cache(left_value.values, self.right_cache)
-                continue
-
-            right_yielded = False
-            for right_value in self.right._evaluate__(left_value):
-                right_yielded = True
-                self._conclusion_.update(self.right._conclusion_)
-                yield left_value.union(right_value)
-                self._conclusion_.clear()
-            if not right_yielded:
-                self._conclusion_.update(self.left._conclusion_)
-                yield left_value
-                self._conclusion_.clear()
-
-
-@dataclass(eq=False)
-class OR(ConclusionSelector):
+class OR(LogicalOperator):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
@@ -1248,9 +1106,7 @@ class OR(ConclusionSelector):
                 for right_value in right_values:
                     self._is_false_ = self.right._is_false_
                     output = left_value.union(right_value)
-                    if not self._is_false_:
-                        self.update_conclusion(output, self.right._conclusion_)
-                    elif not self._yield_when_false_:
+                    if self._is_false_ and not self._yield_when_false_:
                         continue
                     if self._is_false_ and self.is_duplicate_output(output):
                         continue
@@ -1258,9 +1114,7 @@ class OR(ConclusionSelector):
                     yield output
             else:
                 self._is_false_ = False
-                self.update_conclusion(left_value, self.left._conclusion_)
                 yield left_value
-            self._conclusion_.clear()
 
 
 def Not(operand: Any) -> SymbolicExpression:
