@@ -439,7 +439,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             if self._child_:
                 for conclusion in self._child_._conclusion_:
                     v = conclusion._evaluate__(v)
-            self._warn_on_unbound_variables(v, selected_vars)
+            self._warn_on_unbound_variables_(v, selected_vars)
             if selected_vars:
                 var_val_gen = {var: var._evaluate__(v) for var in selected_vars}
                 for sol in generate_combinations(var_val_gen):
@@ -452,7 +452,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
                     seen_values.add(v)
                     yield v
 
-    def _warn_on_unbound_variables(self, sources: HashedIterable, selected_vars: Iterable[HasDomain]):
+    def _warn_on_unbound_variables_(self, sources: HashedIterable, selected_vars: Iterable[HasDomain]):
         """
         Warn the user if there are unbound variables in the query descriptor, because this will result in a cartesian
         product join operation.
@@ -476,7 +476,10 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return self._child_._all_variable_instances_
+        if self._child_:
+            return self._child_._all_variable_instances_
+        else:
+            return []
 
     def __repr__(self):
         return self._name_
@@ -522,7 +525,7 @@ class Entity(QueryObjectDescriptor[T]):
 
     @property
     def _name_(self) -> str:
-        return f"Entity({self.selected_variable_._name_})"
+        return f"Entity({self.selected_variable_._name_ if self.selected_variable_ else ''})"
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         required_vars = HashedIterable()
