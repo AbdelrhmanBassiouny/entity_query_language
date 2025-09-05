@@ -10,7 +10,8 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Predicate, Not
+    chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Not
+from .predicate import Predicate
 from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
