@@ -59,15 +59,16 @@ class Predicate(SymbolicExpression):
         for kwargs in generate_combinations(kwargs_generators):
             function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
             function_value = HashedValue(function_output)
-            if (self._conditions_root_ is self) or isinstance(self._parent_, LogicalOperator):
-                if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
-                    self._is_false_ = False
-                else:
-                    self._is_false_ = True
-                if self._yield_when_false_ or not self._is_false_:
-                    values = {self._child_vars_[k]._parent_variable_._id_:
-                                  self._child_vars_[k]._parent_variable_._domain_[v[self._child_vars_[k]._id_].id_]
-                              for k, v in kwargs.items()}
-                    yield values
+            if (not self._invert_ and function_value.value) or (self._invert_ and not function_value.value):
+                self._is_false_ = False
             else:
-                yield {self._id_: function_value}
+                self._is_false_ = True
+            if self._yield_when_false_ or not self._is_false_:
+                values = {}
+                for k, v in kwargs.items():
+                    var = self._child_vars_[k]
+                    parent_var = var._parent_variable_
+                    if parent_var:
+                        values[parent_var._id_] = parent_var._domain_[v[var._id_].id_]
+                values[self._id_] = function_value
+                yield values
