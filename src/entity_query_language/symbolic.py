@@ -291,6 +291,8 @@ class Source(SymbolicExpression[T]):
         return self._value_
 
     def __getattr__(self, name):
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(f"{self._name_} has no attribute {name}")
         return SourceAttribute(name, getattr(self._value_, name), _child_=self)
 
     def __call__(self, *args, **kwargs):
@@ -575,6 +577,8 @@ class HasDomain(SymbolicExpression[T], ABC):
             yield {self._id_: HashedValue(v)}
 
     def __getattr__(self, name):
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(f"{self._name_} has no attribute {name}")
         return Attribute(self, name)
 
     def __call__(self, *args, **kwargs):
