@@ -12,7 +12,7 @@ chapters:
 - file: example_with_inference
 - file: example_with_rule_tree
 - file: example_with_predicate
-- file: example_with_predicate_form
+- file: example_with_predicate_style_query
 - file: eql_for_sql_experts
 - file: bibliography
 - file: autoapi/index

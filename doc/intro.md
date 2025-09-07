@@ -8,9 +8,9 @@ EQL is a relational query language that is pythonic, and intuitive.
 The interface side of EQL is inspired by [euROBIN](https://www.eurobin-project.eu/) entity query language white paper.
 
 
-## Example Usage
+# Example Usage
 
-# Basic Example
+## Basic Example
 An important feature of EQL is that you do not need to do operations like JOIN in SQL, this is performed implicitly.
 EQL tries to mirror your intent in a query statement with as less boiler plate code as possiple.
 For example an attribute access with and equal check to another value is just how you expect:
@@ -65,6 +65,6 @@ object instance and use them as part of the query conditions.
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {1.0.0},
+version = {1.3.0},
 }
 ```

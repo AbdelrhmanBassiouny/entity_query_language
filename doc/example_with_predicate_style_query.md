@@ -1,4 +1,4 @@
-# Example: Predicate Form Queries and Rules
+# Example: Predicate (Functional) Style Queries and Rules
 
 This example shows how to write queries and rules using the predicate form.
 
