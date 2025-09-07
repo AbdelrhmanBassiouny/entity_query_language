@@ -89,8 +89,9 @@ class SymbolicExpression(Generic[T], ABC):
         if self._id_ not in self._id_expression_map_:
             self._id_expression_map_[self._id_] = self
 
-    def _update_child_(self):
-        self._child_ = self._update_children_(self._child_)[0]
+    def _update_child_(self, child: Optional[SymbolicExpression] = None):
+        child = child or self._child_
+        self._child_ = self._update_children_(child)[0]
 
     def _update_children_(self, *children: SymbolicExpression) -> Tuple[SymbolicExpression, ...]:
         children: Dict[int, SymbolicExpression] = dict(enumerate(children))
@@ -115,6 +116,14 @@ class SymbolicExpression(Generic[T], ABC):
         self._node_ = Node(name)
         self._node_._expression_ = self
 
+    @abstractmethod
+    def _reset_cache_(self) -> None:
+        """
+        Reset the cache of the symbolic expression.
+        This method should be implemented by subclasses.
+        """
+        ...
+
     @property
     def _yield_when_false_(self) -> bool:
         return self._yield_when_false__
@@ -124,6 +133,12 @@ class SymbolicExpression(Generic[T], ABC):
         self._yield_when_false__ = value
         for child in self._children_:
             child._yield_when_false_ = value
+
+    def _get_var_id_(self, operand: SymbolicExpression) -> int:
+        if isinstance(operand, An):
+            return operand._parent_variable_._id_
+        else:
+            return operand._id_
 
     @abstractmethod
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -278,6 +293,9 @@ class Source(SymbolicExpression[T]):
             self._child_ = None
         super().__post_init__()
 
+    def _reset_cache_(self) -> None:
+        ...
+
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
@@ -350,6 +368,9 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         """
         ...
 
+    def _reset_cache_(self) -> None:
+        self._child_._reset_cache_()
+
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         return HashedIterable()
 
@@ -360,7 +381,7 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
 
     def _process_result_(self, result: Dict[int, HashedValue]) -> Union[T, Dict[SymbolicExpression[T], T]]:
         if isinstance(self._child_, Entity):
-            return result[self._child_.selected_variable_._id_].value
+            return result[self._child_.selected_variable._id_].value
         elif isinstance(self._child_, SetOf):
             return {self._id_expression_map_[var_id]: v.value for var_id, v in result.items()}
         else:
@@ -383,7 +404,9 @@ class The(ResultQuantifier[T]):
 
     def evaluate(self) -> Union[Iterable[T], T, Dict[SymbolicExpression[T], T]]:
         result = self._evaluate__()
-        return self._process_result_(result)
+        result = self._process_result_(result)
+        self._reset_cache_()
+        return result
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         sol_gen = self._child_._evaluate__(sources)
@@ -411,6 +434,7 @@ class An(ResultQuantifier[T]):
     def evaluate(self) -> Union[Iterable[T], Iterable[Dict[SymbolicExpression[T], T]]]:
         results = self._evaluate__()
         yield from map(self._process_result_, results)
+        self._reset_cache_()
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         values = self._child_._evaluate__(sources)
@@ -427,6 +451,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
     also describes the condition(s)/properties of the queried object(s).
     """
     _child_: Optional[SymbolicExpression[T]] = field(default=None)
+    _warned_vars_: typing.Set = field(default_factory=set, init=False)
 
     def _evaluate_(self, selected_vars: Optional[Iterable[HasDomain]] = None,
                    sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -456,6 +481,10 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
                     seen_values.add(v)
                     yield v
 
+    def _reset_cache_(self) -> None:
+        if self._child_:
+            self._child_._reset_cache_()
+
     def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue], selected_vars: Iterable[HasDomain]):
         """
         Warn the user if there are unbound variables in the query descriptor, because this will result in a cartesian
@@ -469,11 +498,13 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             unbound_variables.update(var._unique_variables_.difference(HashedIterable(values=sources)))
         unbound_variables_with_domain = HashedIterable()
         for var in unbound_variables:
-            if var.value._domain_ and len(var.value._domain_.values) > 1:
-                unbound_variables_with_domain.add(var)
+            if var.value._domain_ and len(var.value._domain_.values) > 20:
+                if var not in self._warned_vars_:
+                    self._warned_vars_.add(var)
+                    unbound_variables_with_domain.add(var)
         if unbound_variables_with_domain:
             logger.warning(f"\nCartesian Product: "
-                           f"The following variables are not bound "
+                           f"The following variables are not constrained "
                            f"{unbound_variables_with_domain.unwrapped_values}"
                            f"\nfor the query descriptor {self._name_}")
 
@@ -494,16 +525,16 @@ class SetOf(QueryObjectDescriptor[T]):
     """
     A query over a set of variables.
     """
-    selected_variables_: Iterable[HasDomain] = field(default_factory=tuple)
+    selected_variables: Iterable[HasDomain] = field(default_factory=tuple)
 
     @property
     def _name_(self) -> str:
-        return f"SetOf({', '.join(var._name_ for var in self.selected_variables_)})"
+        return f"SetOf({', '.join(var._name_ for var in self.selected_variables)})"
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         required_vars = HashedIterable()
-        required_vars.update(self.selected_variables_)
-        for var in self.selected_variables_:
+        required_vars.update(self.selected_variables)
+        for var in self.selected_variables:
             required_vars.update(var._unique_variables_)
         if child:
             for conc in child._conclusion_:
@@ -511,13 +542,23 @@ class SetOf(QueryObjectDescriptor[T]):
         return required_vars
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        sol_gen = self._evaluate_(self.selected_variables_, sources)
+        sol_gen = self._evaluate_(self.selected_variables, sources)
         for sol in sol_gen:
-            if self.selected_variables_:
+            if self.selected_variables:
                 yield {var._id_: next(var._evaluate__(sol))[var._id_]
-                       for var in self.selected_variables_ if var._id_ in sol}
+                       for var in self.selected_variables if var._id_ in sol}
             else:
                 yield sol
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        vars = []
+        if self.selected_variables:
+            vars.extend(self.selected_variables)
+        if self._child_:
+            vars.extend(self._child_._all_variable_instances_)
+        return vars
 
 
 @dataclass(eq=False)
@@ -525,31 +566,70 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable_: Optional[HasDomain[T]] = field(default=None)
+    selected_variable: Optional[Variable[T]] = field(default=None)
+    domain: Optional[Any] = field(default=None)
+
+    def __post_init__(self):
+        self.update_variable_domain()
+        super().__post_init__()
+        self.update_child_expression_with_variable_properties()
+
+    def update_variable_domain(self):
+        """
+        Update the domain of the variable with the provided entity domain.
+        """
+        if self.domain is not None:
+            if self.selected_variable is not None:
+                type_ = self.selected_variable._type_
+                child = self.domain
+                if not isinstance(child, (Source, HasDomain)):
+                    child = Source(type_.__name__, self.domain)
+                var_domain = HasType(_child_=child, _type_=(type_,))
+                self.selected_variable._update_domain_(var_domain)
+
+    def update_child_expression_with_variable_properties(self):
+        """
+        Update the child expression with the properties of the variable.
+        """
+        if self.selected_variable and self.selected_variable._properties_:
+            if self._child_:
+                self._update_child_(chained_logic(AND, self.selected_variable._properties_, self._child_))
+            else:
+                self._update_child_(self.selected_variable._properties_)
 
     @property
     def _name_(self) -> str:
-        return f"Entity({self.selected_variable_._name_ if self.selected_variable_ else ''})"
+        return f"Entity({self.selected_variable._name_ if self.selected_variable else ''})"
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         required_vars = HashedIterable()
-        if self.selected_variable_:
-            required_vars.add(self.selected_variable_)
-            required_vars.update(self.selected_variable_._unique_variables_)
+        if self.selected_variable:
+            required_vars.add(self.selected_variable)
+            required_vars.update(self.selected_variable._unique_variables_)
         if child:
             for conc in child._conclusion_:
                 required_vars.update(conc._unique_variables_)
         return required_vars
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
-        selected_variables = [self.selected_variable_] if self.selected_variable_ else []
+        selected_variables = [self.selected_variable] if self.selected_variable else []
         sol_gen = self._evaluate_(selected_variables, sources)
         for sol in sol_gen:
             if self._yield_when_false_ or not self._is_false_:
-                if self.selected_variable_:
-                    yield from self.selected_variable_._evaluate__(sol)
+                if self.selected_variable:
+                    yield from self.selected_variable._evaluate__(sol)
                 else:
                     yield sol
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        vars = []
+        if self.selected_variable:
+            vars.append(self.selected_variable)
+        if self._child_:
+            vars.extend(self._child_._all_variable_instances_)
+        return vars
 
 
 @dataclass(eq=False)
@@ -559,18 +639,24 @@ class HasDomain(SymbolicExpression[T], ABC):
     _child_: Optional[HasDomain] = field(init=False)
 
     def __post_init__(self):
-        if self._domain_ is not None:
-            if isinstance(self._domain_, (HasDomain, Source)):
-                self._domain_sources_.append(self._domain_)
-            if isinstance(self._domain_, Source):
-                self._domain_ = HashedIterable(self._domain_._evaluate__().value)
-            elif isinstance(self._domain_, HasDomain):
-                self._domain_ = HashedIterable((next(iter(v.values())) for v in self._domain_._evaluate__()))
-            elif is_iterable(self._domain_):
-                self._domain_ = HashedIterable(self._domain_)
-            else:
-                self._domain_ = HashedIterable([HashedValue(self._domain_)])
+        self._update_domain_(self._domain_)
         super().__post_init__()
+
+    def _update_domain_(self, domain):
+        if domain is not None:
+            if isinstance(domain, (HasDomain, Source)):
+                self._domain_sources_.append(domain)
+            if isinstance(domain, Source):
+                self._domain_ = HashedIterable(domain._evaluate__().value)
+            elif isinstance(domain, HasDomain):
+                self._domain_ = HashedIterable((next(iter(v.values())) for v in domain._evaluate__()))
+            elif is_iterable(domain):
+                self._domain_ = HashedIterable(domain)
+            else:
+                self._domain_ = HashedIterable([HashedValue(domain)])
+
+    def _reset_cache_(self) -> None:
+        ...
 
     def __iter__(self):
         for v in self._domain_:
@@ -650,7 +736,7 @@ class HasType(DomainFilter):
 
     @property
     def _name_(self):
-        return f"HasType({self._type_.__name__})"
+        return f"HasType({','.join(t.__name__ for t in self._type_)})"
 
     def _filter_func__(self, v: Any) -> bool:
         if isinstance(v, HashedValue):
@@ -664,13 +750,16 @@ class HasType(DomainFilter):
 
 
 @dataclass(eq=False)
-class Variable(HasDomain):
+class Variable(HasDomain[T]):
     _name__: str
-    _type_: Union[Type, Callable[[Any], Any]]
+    _type_: Type
     _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
     _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
+    _properties_: Optional[SymbolicExpression] = field(default=None)
 
     def __post_init__(self):
+        if self._cls_kwargs_ and not self._type_:
+            raise ValueError(f"Variable {self._name_} has class keyword arguments but no type is specified.")
         if type(self) is Variable:
             self._child_ = None
         super().__post_init__()
@@ -682,7 +771,8 @@ class Variable(HasDomain):
                 else:
                     domain_sources.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
             self._domain_sources_.extend(domain_sources)
-            _ = self._update_children_(*domain_sources)
+            # _ = self._update_children_(*domain_sources)
+            self._properties_ = chained_logic(AND, *[getattr(self, k) == v for k, v in self._cls_kwargs_.items()])
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
@@ -691,11 +781,14 @@ class Variable(HasDomain):
         sources = sources or {}
         if self._id_ in sources:
             yield {self._id_: sources[self._id_]}
-        elif not self._domain_:
-            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, HasDomain) else HashedValue([v])
+        elif self._type_ is not None and not self._domain_:
+            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else HashedValue([v])
                                  for k, v in self._cls_kwargs_.items()}
             for kwargs in generate_combinations(kwargs_generators):
-                instance = self._type_(**{k: v[self._cls_kwargs_[k]._id_].value for k, v in kwargs.items()})
+                instance = self._type_(**{k: v[self._get_var_id_(self._cls_kwargs_[k])].value for k, v in kwargs.items()})
+                values = {self._id_: HashedValue(instance)}
+                for k, v in kwargs.items():
+                    values.update(v)
                 yield {self._id_: HashedValue(instance)}
         else:
             yield from self
@@ -708,11 +801,14 @@ class Variable(HasDomain):
     def _from_domain_(cls, iterable, clazz: Optional[Type] = None,
                       name: Optional[str] = None) -> Variable:
         if not is_iterable(iterable):
-            iterable = make_list(iterable)
+            iterable = HashedIterable([iterable])
         if not clazz:
-            clazz = type(next((iter(iterable)), None))
+            clazz = type(next(iter(iterable)))
         if name is None:
-            name = clazz.__name__
+            if clazz is not None:
+                name = clazz.__name__
+            else:
+                name = "Var"
         return Variable(name, clazz, _domain_=iterable)
 
     @property
@@ -726,10 +822,7 @@ class Variable(HasDomain):
         return variables
 
     def __repr__(self):
-        if self._name_:
-            return self._name_
-        return (f"Symbolic({self._type_.__name__}("
-                f"{', '.join(f'{k}={v!r}' for k, v in self._cls_kwargs_.items())}))")
+        return self._name_
 
 
 @dataclass(eq=False)
@@ -857,6 +950,13 @@ class BinaryOperator(SymbolicExpression, ABC):
         cache = self._cache_ if cache is None else cache
         cache.insert({k: v for k, v in values.items() if k in cache.keys}, output=self._is_false_)
 
+    def _reset_cache_(self) -> None:
+        self._cache_.clear()
+        self.seen_parent_values[True].clear()
+        self.seen_parent_values[False].clear()
+        self.left._reset_cache_()
+        self.right._reset_cache_()
+
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
@@ -930,14 +1030,13 @@ class Comparator(BinaryOperator):
                 yield from self.yield_from_cache(sources)
                 return
 
-        order_operand_map = self.get_operand_order_map(sources)
-
-        first_values = order_operand_map['first']._evaluate__(sources)
+        first_operand, second_operand = self.get_first_second_operands(sources)
+        first_values = first_operand._evaluate__(sources)
         for first_value in first_values:
-            operand_value_map = {order_operand_map['first']._id_: first_value[order_operand_map['first']._id_]}
-            second_values = order_operand_map['second']._evaluate__(sources)
+            operand_value_map = {first_operand._id_: first_value[self._get_var_id_(first_operand)]}
+            second_values = second_operand._evaluate__(sources)
             for second_value in second_values:
-                operand_value_map[order_operand_map['second']._id_] = second_value[order_operand_map['second']._id_]
+                operand_value_map[second_operand._id_] = second_value[self._get_var_id_(second_operand)]
                 res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
@@ -950,11 +1049,11 @@ class Comparator(BinaryOperator):
     def apply_operation(self, operand_values: Dict[int, HashedValue]):
         return self.operation(operand_values[self.left._id_].value, operand_values[self.right._id_].value)
 
-    def get_operand_order_map(self, sources: Dict[int, HashedValue]):
-        if self.right._parent_variable_._id_ in sources:
-            return {'first': self.right, 'second': self.left}
+    def get_first_second_operands(self, sources: Dict[int, HashedValue]) -> Tuple[SymbolicExpression, SymbolicExpression]:
+        if sources and self.right._parent_variable_._id_ in sources:
+            return self.right, self.left
         else:
-            return {'first': self.left, 'second': self.right}
+            return self.left, self.right
 
     def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
         left_leaf_value = self.left._parent_variable_._domain_[operand_value_map[self.left].id_]
@@ -1107,9 +1206,9 @@ def Not(operand: Any) -> SymbolicExpression:
                                   f" instead as negating quantifiers is most likely not what you want"
                                   f" as it is ambiguous.")
     elif isinstance(operand, Entity):
-        operand = operand.__class__(Not(operand._child_), operand.selected_variable_)
+        operand = operand.__class__(Not(operand._child_), operand.selected_variable)
     elif isinstance(operand, SetOf):
-        operand = operand.__class__(Not(operand._child_), operand.selected_variables_)
+        operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
         operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):

@@ -173,6 +173,10 @@ class SeenSet:
                 return True
         return False
 
+    def clear(self):
+        self.seen.clear()
+        self.all_seen = False
+
 
 class CacheDict(UserDict):
     ...
@@ -283,6 +287,10 @@ class IndexedCache:
                 yield from self._yield_result(assignment, cache_val, key_idx, result)
         else:
             yield result, cache
+
+    def clear(self):
+        self.cache.clear()
+        self.seen_set.clear()
 
     def _yield_result(self, assignment: Dict, cache_val: Any, key_idx: int, result: Dict[int, Any]):
         """

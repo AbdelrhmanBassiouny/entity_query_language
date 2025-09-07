@@ -8,7 +8,7 @@ from typing import Dict
 from typing_extensions import Any, Optional, List
 
 from .enums import RDREdge
-from .hashed_data import HashedIterable, HashedValue
+from .hashed_data import HashedValue
 from .symbolic import SymbolicExpression, T, HasDomain, Variable
 
 
@@ -46,6 +46,9 @@ class Conclusion(SymbolicExpression[T], ABC):
     def _name_(self) -> str:
         value_str = self.value._type_.__name__ if isinstance(self.value, Variable) else str(self.value)
         return f"{self.__class__.__name__}({self.var._name_}, {value_str})"
+
+    def _reset_cache_(self) -> None:
+        ...
 
 
 @dataclass(eq=False)

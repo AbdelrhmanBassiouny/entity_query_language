@@ -17,7 +17,7 @@ from .utils import is_iterable
 T = TypeVar('T')  # Define type variable "T"
 
 
-def an(entity_: Union[SetOf[T], Entity[T]]) -> An[T]:
+def an(entity_: Union[SetOf[T], Entity[T]]) -> Union[An[T], T]:
     """
     Select a single element satisfying the given entity description.
 
@@ -41,7 +41,8 @@ def the(entity_: Union[SetOf[T], Entity[T]]) -> The[T]:
     return The(entity_)
 
 
-def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool]) -> Entity[T]:
+def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool],
+           domain: Optional[Any] = None) -> Entity[T]:
     """
     Create an entity descriptor from a selected variable and its properties.
 
@@ -55,7 +56,7 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool]) -
     expression = None
     if len(properties) > 0:
         expression = and_(*properties) if len(properties) > 1 else properties[0]
-    return Entity(_child_=expression, selected_variable_=selected_variable)
+    return Entity(_child_=expression, selected_variable=selected_variable, domain=domain)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
@@ -70,7 +71,7 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :rtype: SetOf[T]
     """
     expression = and_(*properties) if len(properties) > 1 else properties[0]
-    return SetOf(_child_=expression, selected_variables_=selected_variables)
+    return SetOf(_child_=expression, selected_variables=selected_variables)
 
 
 def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain, Source]:
@@ -92,9 +93,9 @@ def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, Has
     if domain is None:
         return Variable(name, type_)
     elif isinstance(domain, (HasDomain, Source)):
-        return Variable(name, type_, _domain_=HasType(_child_=domain, _type_=type_))
+        return Variable(name, type_, _domain_=HasType(_child_=domain, _type_=(type_,)))
     elif is_iterable(domain):
-        domain = HasType(_child_=Source(type_.__name__, domain), _type_=type_)
+        domain = HasType(_child_=Source(type_.__name__, domain), _type_=(type_,))
         return Variable(name, type_, _domain_=domain)
     else:
         return Source(name, domain)

@@ -5,13 +5,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterable, Union
 
+from .hashed_data import T
 from .hashed_data import HashedIterable, HashedValue
 from .symbolic import SymbolicExpression, HasDomain, Variable, LogicalOperator
 from .utils import generate_combinations
 
 
 @dataclass(eq=False)
-class Predicate(SymbolicExpression):
+class Predicate(SymbolicExpression[T]):
     """
     A symbolic expression that represents a predicate function applied to symbolic variables.
     """
@@ -68,3 +69,6 @@ class Predicate(SymbolicExpression):
                     values.update(v)
                 values[self._id_] = HashedValue(function_output)
                 yield values
+
+    def _reset_cache_(self) -> None:
+        ...

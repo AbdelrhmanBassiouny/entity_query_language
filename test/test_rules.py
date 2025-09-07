@@ -1,3 +1,4 @@
+from examples.intro_example import prismatic_connection
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
 from entity_query_language import let, symbolic_mode, an, entity, and_
@@ -22,10 +23,28 @@ def test_generate_drawers(handles_and_containers_world):
     all_solutions = list(solutions)
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
     assert all(isinstance(d, Drawer) for d in all_solutions)
-    assert all_solutions[0].handle.name == "Handle3"
-    assert all_solutions[0].container.name == "Container3"
-    assert all_solutions[1].handle.name == "Handle1"
-    assert all_solutions[1].container.name == "Container1"
+    assert all_solutions[1].handle.name == "Handle3"
+    assert all_solutions[1].container.name == "Container3"
+    assert all_solutions[0].handle.name == "Handle1"
+    assert all_solutions[0].container.name == "Container1"
+
+
+def test_generate_drawers_predicate_form(handles_and_containers_world):
+    world = let("world", type_=World, domain=handles_and_containers_world)
+    with symbolic_mode():
+        query = an(entity(Drawer(handle=an(entity(handle:=Handle(), domain=world.bodies)),
+                                 container=an(entity(container:=Container(), domain=world.bodies))),
+                          an(entity(FixedConnection(parent=container, child=handle), domain=world.connections)),
+                          an(entity(PrismaticConnection(child=container), domain=world.connections))))
+
+    # query._render_tree_()
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+    assert all(isinstance(d, Drawer) for d in all_solutions)
+    assert all_solutions[1].handle.name == "Handle3"
+    assert all_solutions[1].container.name == "Container3"
+    assert all_solutions[0].handle.name == "Handle1"
+    assert all_solutions[0].container.name == "Container1"
 
 
 def test_add_conclusion(handles_and_containers_world):
