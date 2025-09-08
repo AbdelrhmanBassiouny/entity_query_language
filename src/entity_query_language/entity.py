@@ -32,14 +32,7 @@ def an(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[S
     :return: A quantifier representing "an" element.
     :rtype: An[T]
     """
-    if isinstance(entity_, (Entity, SetOf)):
-        return An(entity_)
-    elif isinstance(entity_, HasDomain):
-        return An(entity(entity_, *properties, domain=domain))
-    elif isinstance(entity_, (list, tuple)):
-        return An(set_of(entity_, *properties))
-    else:
-        raise ValueError(f'Invalid entity: {entity_}')
+    return _an_or_the(An, entity_, *properties, domain=domain)
 
 
 a = an
@@ -48,16 +41,34 @@ This is an alias to accommodate for words not starting with vowels.
 """
 
 
-def the(entity_: Union[SetOf[T], Entity[T]]) -> The[T]:
+def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[SymbolicExpression, bool],
+       domain: Optional[Any]=None) -> The[T]:
     """
     Select the unique element satisfying the given entity description.
 
     :param entity_: An entity or a set expression to quantify over.
     :type entity_: Union[SetOf[T], Entity[T]]
-    :return: A quantifier representing "the" element.
+    :param properties: Conditions that define the entity.
+    :type properties: Union[SymbolicExpression, bool]
+    :param domain: Optional domain to constrain the selected variable.
+    :type domain: Optional[Any]
+    :return: A quantifier representing "an" element.
     :rtype: The[T]
     """
-    return The(entity_)
+    return _an_or_the(The, entity_, *properties, domain=domain)
+
+
+def _an_or_the(quantifier: Union[Type[An], Type[The]],
+               entity_: Union[SetOf[T], Entity[T]], *properties: Union[SymbolicExpression, bool],
+               domain: Optional[Any]=None) -> Union[An[T], The[T]]:
+    if isinstance(entity_, (Entity, SetOf)):
+        return quantifier(entity_)
+    elif isinstance(entity_, HasDomain):
+        return quantifier(entity(entity_, *properties, domain=domain))
+    elif isinstance(entity_, (list, tuple)):
+        return quantifier(set_of(entity_, *properties))
+    else:
+        raise ValueError(f'Invalid entity: {entity_}')
 
 
 def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool],

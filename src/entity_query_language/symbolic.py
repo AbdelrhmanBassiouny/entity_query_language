@@ -502,10 +502,6 @@ class An(ResultQuantifier[T]):
                 value.update({self._id_: value[self._parent_variable_._id_]})
                 yield value
 
-A = An
-"""
-This is to accommodate for words not starting with vowels.
-"""
 
 @dataclass(eq=False)
 class QueryObjectDescriptor(SymbolicExpression[T], ABC):
