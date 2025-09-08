@@ -347,7 +347,7 @@ def test_generate_with_more_than_one_source_predicate_form(handles_and_container
                             domain=world.connections)
                           ]))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
