@@ -9,10 +9,15 @@ from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnect
 
 # disable_caching()
 
-
 def test_empty_conditions(handles_and_containers_world):
     world = handles_and_containers_world
     query = an(entity(body := let("body", type_=Body, domain=world.bodies)))
+    assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
+
+
+def test_empty_conditions_without_using_entity(handles_and_containers_world):
+    world = handles_and_containers_world
+    query = an(let("body", type_=Body, domain=world.bodies))
     assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
 
 
@@ -23,11 +28,17 @@ def test_reevaluation_of_simple_query(handles_and_containers_world):
     assert len(list(query.evaluate())) == len(world.bodies), "Re-eval: Should generate 6 bodies."
 
 
-
 def test_empty_conditions_predicate_form(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         query = an(entity(body := Body(), domain=world.bodies))
+    assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
+
+
+def test_empty_conditions_predicate_form_without_entity(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(body := Body(), domain=world.bodies)
     assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
 
 
@@ -49,6 +60,19 @@ def test_one_property_with_an_external_condition_predicate_form(handles_and_cont
     assert results[0].parent.name == "Container1"
     assert results[0].child.name == "Handle1"
 
+
+def test_one_property_with_an_external_condition_predicate_form_without_entity(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(connection := Connection(parent=let("c1", type_=Container, domain=world.bodies)),
+                   connection.child.name == "Handle1",
+                   domain=world.connections)
+    results = list(query.evaluate())
+    assert len(results) == 1, "Should generate 1 connection."
+    assert results[0].parent.name == "Container1"
+    assert results[0].child.name == "Handle1"
+
+
 def test_nested_property_predicate_form(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
@@ -62,6 +86,21 @@ def test_nested_property_predicate_form(handles_and_containers_world):
     assert results[1].parent.name == "Container1"
     assert results[1].child.name == "Handle1"
 
+
+def test_nested_property_predicate_form_without_entity(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(Connection(parent=an(Container(), domain=world.bodies),
+                              child=an(Handle(), domain=world.bodies)),
+                   domain=world.connections)
+    results = list(query.evaluate())
+    assert len(results) == 2, "Should generate 2 connections."
+    assert results[0].parent.name == "Container3"
+    assert results[0].child.name == "Handle3"
+    assert results[1].parent.name == "Container1"
+    assert results[1].child.name == "Handle1"
+
+
 def test_nested_specified_property_predicate_form(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
@@ -73,17 +112,31 @@ def test_nested_specified_property_predicate_form(handles_and_containers_world):
     assert results[0].parent.name == "Container1"
     assert results[0].child.name == "Handle1"
 
+
+def test_nested_specified_property_predicate_form_without_entity(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(Connection(parent=an(Container(name="Container1"), domain=world.bodies),
+                                     child=an(Handle(), domain=world.bodies)),
+                          domain=world.connections)
+    results = list(query.evaluate())
+    assert len(results) == 1, "Should generate 1 connections."
+    assert results[0].parent.name == "Container1"
+    assert results[0].child.name == "Handle1"
+
+
 def test_nested_property_with_extra_conditions_predicate_form(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         query = an(entity(Connection(parent=an(entity(Container(), domain=world.bodies)),
-                                     child=an(entity(handle:=Handle(), domain=world.bodies))),
+                                     child=an(entity(handle := Handle(), domain=world.bodies))),
                           handle.name.endswith('3'),
                           domain=world.connections))
     results = list(query.evaluate())
     assert len(results) == 1, "Should generate 1 connections."
     assert results[0].parent.name == "Container3"
     assert results[0].child.name == "Handle3"
+
 
 def test_generate_with_using_attribute_and_callables(handles_and_containers_world):
     """
@@ -196,13 +249,13 @@ def test_generate_with_or_and(handles_and_containers_world):
 def test_reevaluation_of_or_and_query(handles_and_containers_world):
     world = handles_and_containers_world
     query = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                         or_(and_(contains(body.name, "Handle"),
-                                  contains(body.name, '1'))
-                             , and_(contains(body.name, 'Container'),
-                                    contains(body.name, '1'))
-                             )
-                         )
-                  )
+                      or_(and_(contains(body.name, "Handle"),
+                               contains(body.name, '1'))
+                          , and_(contains(body.name, 'Container'),
+                                 contains(body.name, '1'))
+                          )
+                      )
+               )
 
     handles_and_container1 = list(query.evaluate())
     assert len(handles_and_container1) == 2, "Should generate one handle and one container."
@@ -259,6 +312,7 @@ def test_reevaluate_with_multi_and(handles_and_containers_world):
     assert isinstance(all_solutions[0], Container), "Re-eval: The generated item should be of type Container."
     assert all_solutions[0].name == "Container1", "Re-eval: The generated item should be of type Container."
 
+
 def test_generate_with_more_than_one_source(handles_and_containers_world):
     world = handles_and_containers_world
 
@@ -276,6 +330,28 @@ def test_generate_with_more_than_one_source(handles_and_containers_world):
                    ).evaluate()
 
     all_solutions = list(solutions)
+    assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+    for sol in all_solutions:
+        assert sol[container] == sol[fixed_connection].parent
+        assert sol[handle] == sol[fixed_connection].child
+        assert sol[prismatic_connection].child == sol[fixed_connection].parent
+
+@pytest.mark.skip(reason="Not sure how to handle this yet.")
+def test_generate_with_more_than_one_source_predicate_form(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    with symbolic_mode():
+        container = let("container", Container, domain=world.bodies)
+        handle = let("handle", Handle, domain=world.bodies)
+        an(fixed_connection:=FixedConnection(parent=container, child=handle), domain=world.connections)
+        an(prismatic_connection:=PrismaticConnection(child=container), domain=world.connections)
+        drawer_components = (container, handle, fixed_connection, prismatic_connection)
+
+    query = an(drawer_components)
+
+    query._render_tree_()
+
+    all_solutions = list(query.evaluate())
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
     for sol in all_solutions:
         assert sol[container] == sol[fixed_connection].parent
@@ -552,4 +628,6 @@ def test_nested_query_with_multiple_sources(handles_and_containers_world):
 
     nested_query_results = list(nested_query.evaluate())
     assert len(nested_query_results) == 2, "Should generate 2 drawer components"
-    assert nested_query_results == original_query_results, "Should generate same results"
+    assert all(nested_res[k] == original_res[k]
+               for nested_res, original_res in zip(original_query_results, nested_query_results)
+               for k in drawer_components), "Should generate same results"

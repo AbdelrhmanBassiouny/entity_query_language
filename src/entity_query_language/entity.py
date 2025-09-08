@@ -17,16 +17,28 @@ from .utils import is_iterable
 T = TypeVar('T')  # Define type variable "T"
 
 
-def an(entity_: Union[SetOf[T], Entity[T]]) -> Union[An[T], T]:
+def an(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[SymbolicExpression, bool],
+       domain: Optional[Any]=None) -> Union[An[T], T, SymbolicExpression[T]]:
     """
     Select a single element satisfying the given entity description.
 
     :param entity_: An entity or a set expression to quantify over.
     :type entity_: Union[SetOf[T], Entity[T]]
+    :param properties: Conditions that define the entity.
+    :type properties: Union[SymbolicExpression, bool]
+    :param domain: Optional domain to constrain the selected variable.
+    :type domain: Optional[Any]
     :return: A quantifier representing "an" element.
     :rtype: An[T]
     """
-    return An(entity_)
+    if isinstance(entity_, (Entity, SetOf)):
+        return An(entity_)
+    elif isinstance(entity_, HasDomain):
+        return An(entity(entity_, *properties, domain=domain))
+    elif isinstance(entity_, (list, tuple)):
+        return An(set_of(entity_, *properties))
+    else:
+        raise ValueError(f'Invalid entity: {entity_}')
 
 
 def the(entity_: Union[SetOf[T], Entity[T]]) -> The[T]:
@@ -50,6 +62,8 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool],
     :type selected_variable: T
     :param properties: Conditions that define the entity.
     :type properties: Union[SymbolicExpression, bool]
+    :param domain: Optional domain to constrain the selected variable.
+    :type domain: Optional[Any]
     :return: Entity descriptor.
     :rtype: Entity[T]
     """
@@ -70,7 +84,12 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :return: Set descriptor.
     :rtype: SetOf[T]
     """
-    expression = and_(*properties) if len(properties) > 1 else properties[0]
+    expression = None
+    if len(properties) > 0:
+        expression = and_(*properties) if len(properties) > 1 else properties[0]
+    else:
+        expression = and_(*[var for var in selected_variables
+                            if var._parent_variable_._properties_ and var._parent_variable_._domain_])
     return SetOf(_child_=expression, selected_variables=selected_variables)
 
 

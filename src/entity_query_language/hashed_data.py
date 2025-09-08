@@ -65,6 +65,10 @@ class HashedIterable(Generic[T]):
         if self.iterable and not isinstance(self.iterable, HashedIterable):
             self.iterable = (HashedValue(v) if not isinstance(v, HashedValue) else v for v in self.iterable)
 
+    def set_iterable(self, iterable):
+        if iterable and not isinstance(iterable, HashedIterable):
+            self.iterable = (HashedValue(v) if not isinstance(v, HashedValue) else v for v in iterable)
+
     def get(self, key: int, default: Any) -> HashedValue[T]:
         return self.values.get(key, default)
 
