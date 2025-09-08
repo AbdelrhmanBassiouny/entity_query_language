@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import wraps
+from typing import Tuple, List
 
 """
 User interface (grammar & vocabulary) for entity query language.
@@ -41,6 +42,12 @@ def an(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[S
         raise ValueError(f'Invalid entity: {entity_}')
 
 
+a = an
+"""
+This is an alias to accommodate for words not starting with vowels.
+"""
+
+
 def the(entity_: Union[SetOf[T], Entity[T]]) -> The[T]:
     """
     Select the unique element satisfying the given entity description.
@@ -67,10 +74,8 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool],
     :return: Entity descriptor.
     :rtype: Entity[T]
     """
-    expression = None
-    if len(properties) > 0:
-        expression = and_(*properties) if len(properties) > 1 else properties[0]
-    return Entity(_child_=expression, selected_variable=selected_variable, domain=domain)
+    selected_variables, expression = _extract_variables_and_expression([selected_variable], *properties)
+    return Entity(_child_=expression, selected_variable=selected_variables[0], domain=domain)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
@@ -84,13 +89,36 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :return: Set descriptor.
     :rtype: SetOf[T]
     """
-    expression = None
-    if len(properties) > 0:
-        expression = and_(*properties) if len(properties) > 1 else properties[0]
-    else:
-        expression = and_(*[var for var in selected_variables
-                            if var._parent_variable_._properties_ and var._parent_variable_._domain_])
+    selected_variables, expression = _extract_variables_and_expression(selected_variables, *properties)
     return SetOf(_child_=expression, selected_variables=selected_variables)
+
+
+def _extract_variables_and_expression(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) \
+        -> Tuple[List[T], SymbolicExpression]:
+    """
+    Extracts the variables and expressions from the selected variables, this is usefule when
+    the selected variables are not all variables but some are expressions like A/An/The.
+
+    :param selected_variables: Iterable of variables to select in the result set.
+    :type selected_variables: Iterable[T]
+    :param properties: Conditions on the selected variables.
+    :type properties: Union[SymbolicExpression, bool]
+    :return: Tuple of selected variables and expressions.
+    :rtype: Tuple[List[T], List[SymbolicExpression]]
+    """
+    expression_list = list(properties)
+    selected_variables = list(selected_variables)
+    for i, var in enumerate(selected_variables):
+        if not isinstance(var, HasDomain):
+            expression = var
+            var = var._get_var_(var)
+            if var._properties_ and var._domain_:
+                expression_list.append(expression)
+            selected_variables[i] = var
+    expression = None
+    if len(expression_list) > 0:
+        expression = and_(*expression_list) if len(expression_list) > 1 else expression_list[0]
+    return selected_variables, expression
 
 
 def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain, Source]:

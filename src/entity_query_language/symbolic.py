@@ -138,11 +138,35 @@ class SymbolicExpression(Generic[T], ABC):
         for child in self._children_:
             child._yield_when_false_ = value
 
-    def _get_var_id_(self, operand: SymbolicExpression) -> int:
-        if isinstance(operand, An):
-            return operand._parent_variable_._id_
+    @staticmethod
+    def _get_var_id_(operand: SymbolicExpression) -> int:
+        """
+        Get the id of the variable/main-variable instance of the given operand.
+
+        :param operand: The operand to get the variable id from.
+        :type operand: SymbolicExpression
+        :return: The variable id.
+        """
+        return SymbolicExpression._get_var_(operand)._id_
+
+    @staticmethod
+    def _get_var_(operand: SymbolicExpression) -> HasDomain:
+        """
+        Get the main variable instance of the given operand, if it is A/An/The then get the selected variable,
+        elif it is already a variable return it otherwise raise an error.
+
+        :param operand: The operand to get the variable from.
+        :type operand: SymbolicExpression
+        :return: The variable instance.
+        """
+        if isinstance(operand, (ResultQuantifier, Entity)):
+            return operand._parent_variable_
+        elif isinstance(operand, HasDomain):
+            return operand
+        elif isinstance(operand, SetOf):
+            raise ValueError(f"The operand {operand} does not have a single variable/HasDomain.")
         else:
-            return operand._id_
+            raise NotImplementedError(f"Getting the variable from operand {operand} is not handled")
 
     @abstractmethod
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -462,20 +486,32 @@ class The(ResultQuantifier[T]):
 class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
-    def evaluate(self) -> Union[Iterable[T], Iterable[Dict[SymbolicExpression[T], T]]]:
+    def evaluate(self) -> Iterable[Union[T, Dict[Union[T,SymbolicExpression[T]], T]]]:
         results = self._evaluate__()
         yield from map(self._process_result_, results)
         self._reset_cache_()
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         sources = sources or {}
+        if self._id_ in sources:
+            if self._child_._child_:
+                self._is_false_ = self._child_._child_._is_false_
+            else:
+                self._is_false_ = self._child_._is_false_
+            yield sources
+            return
         values = self._child_._evaluate__(sources)
         for value in values:
             self._is_false_ = self._child_._is_false_
             if self._yield_when_false_ or not self._is_false_:
                 value.update(sources)
+                value.update({self._id_: value[self._parent_variable_._id_]})
                 yield value
 
+A = An
+"""
+This is to accommodate for words not starting with vowels.
+"""
 
 @dataclass(eq=False)
 class QueryObjectDescriptor(SymbolicExpression[T], ABC):
@@ -610,11 +646,11 @@ class Entity(QueryObjectDescriptor[T]):
     domain: Optional[Any] = field(default=None)
 
     def __post_init__(self):
-        self.update_variable_domain()
+        self.parse_selected_variable_and_update_its_domain()
         super().__post_init__()
         self.update_child_expression_with_variable_properties()
 
-    def update_variable_domain(self):
+    def parse_selected_variable_and_update_its_domain(self):
         """
         Update the domain of the variable with the provided entity domain.
         """

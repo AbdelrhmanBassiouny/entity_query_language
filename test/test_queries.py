@@ -2,7 +2,7 @@ import pytest
 
 from entity_query_language import and_, not_, contains, in_, symbolic_mode
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
-from entity_query_language.entity import an, entity, set_of, let, the, or_, predicate
+from entity_query_language.entity import an, entity, set_of, let, the, or_, predicate, a
 from entity_query_language.failures import MultipleSolutionFound
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
 
@@ -322,7 +322,7 @@ def test_generate_with_more_than_one_source(handles_and_containers_world):
     prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
     drawer_components = (container, handle, fixed_connection, prismatic_connection)
 
-    solutions = an(set_of(drawer_components,
+    solutions = a(set_of(drawer_components,
                           container == fixed_connection.parent,
                           handle == fixed_connection.child,
                           container == prismatic_connection.child
@@ -336,18 +336,16 @@ def test_generate_with_more_than_one_source(handles_and_containers_world):
         assert sol[handle] == sol[fixed_connection].child
         assert sol[prismatic_connection].child == sol[fixed_connection].parent
 
-@pytest.mark.skip(reason="Not sure how to handle this yet.")
 def test_generate_with_more_than_one_source_predicate_form(handles_and_containers_world):
     world = handles_and_containers_world
 
     with symbolic_mode():
-        container = let("container", Container, domain=world.bodies)
-        handle = let("handle", Handle, domain=world.bodies)
-        an(fixed_connection:=FixedConnection(parent=container, child=handle), domain=world.connections)
-        an(prismatic_connection:=PrismaticConnection(child=container), domain=world.connections)
-        drawer_components = (container, handle, fixed_connection, prismatic_connection)
-
-    query = an(drawer_components)
+        query = a(set_of([a(container := Container(), domain=world.bodies),
+                          a(handle := Handle(), domain=world.bodies),
+                          a(prismatic_connection:=PrismaticConnection(child=container), domain=world.connections),
+                          a(fixed_connection := FixedConnection(parent=container, child=handle),
+                            domain=world.connections)
+                          ]))
 
     query._render_tree_()
 
