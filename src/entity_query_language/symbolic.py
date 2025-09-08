@@ -111,6 +111,7 @@ class SymbolicExpression(Generic[T], ABC):
             child = self._child_
         child_cp = child.__new__(child.__class__)
         child_cp.__dict__.update(child.__dict__)
+        child_cp._seen_parent_values_ = {True: SeenSet(), False: SeenSet()}
         child_cp._create_node_(child._node_.name + f"_{self._id_}")
         if hasattr(child_cp, "_child_") and child_cp._child_ is not None:
             child_cp._update_child_()
@@ -493,13 +494,6 @@ class An(ResultQuantifier[T]):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         sources = sources or {}
-        if self._id_ in sources:
-            if self._child_._child_:
-                self._is_false_ = self._child_._child_._is_false_
-            else:
-                self._is_false_ = self._child_._is_false_
-            yield sources
-            return
         values = self._child_._evaluate__(sources)
         for value in values:
             self._is_false_ = self._child_._is_false_

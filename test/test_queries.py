@@ -340,10 +340,10 @@ def test_generate_with_more_than_one_source_predicate_form(handles_and_container
     world = handles_and_containers_world
 
     with symbolic_mode():
-        query = a(set_of([a(container := Container(), domain=world.bodies),
-                          a(handle := Handle(), domain=world.bodies),
-                          a(prismatic_connection:=PrismaticConnection(child=container), domain=world.connections),
-                          a(fixed_connection := FixedConnection(parent=container, child=handle),
+        query = a(set_of([container := a(Container(), domain=world.bodies),
+                          handle := a(Handle(), domain=world.bodies),
+                          prismatic_connection:=a(PrismaticConnection(child=container), domain=world.connections),
+                          fixed_connection := a(FixedConnection(parent=container, child=handle),
                             domain=world.connections)
                           ]))
 
