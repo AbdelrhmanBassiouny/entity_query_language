@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import UserDict
 from copy import copy
 
 from . import logger
@@ -396,6 +397,13 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     (e.g., An, The).
     """
     _child_: QueryObjectDescriptor[T]
+    _original_id_: int = field(init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._original_id_ = self._id_
+        if isinstance(self._child_, Entity):
+            self._id_ = self._child_.selected_variable._id_
 
     @property
     def _name_(self) -> str:
@@ -433,13 +441,24 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
     def _all_variable_instances_(self) -> List[Variable]:
         return self._child_._all_variable_instances_
 
-    def _process_result_(self, result: Dict[int, HashedValue]) -> Union[T, Dict[SymbolicExpression[T], T]]:
+    def _process_result_(self, result: Dict[int, HashedValue]) -> Union[T, UnificationDict]:
         if isinstance(self._child_, Entity):
             return result[self._child_.selected_variable._id_].value
         elif isinstance(self._child_, SetOf):
-            return {self._id_expression_map_[var_id]: v.value for var_id, v in result.items()}
+            selected_variables_ids = [v._id_ for v in self._child_.selected_variables]
+            return UnificationDict({self._id_expression_map_[var_id]: value
+                    for var_id, value in result.items() if var_id in selected_variables_ids})
         else:
             raise NotImplementedError(f"Unknown child type {type(self._child_)}")
+
+
+class UnificationDict(UserDict):
+    """
+    A dictionary which maps all expressions that are on a single variable to the original variable id.
+    """
+    def __getitem__(self, key: SymbolicExpression[T]) -> T:
+        key = key._id_expression_map_[key._id_]
+        return super().__getitem__(key).value
 
 
 @dataclass(eq=False)
@@ -456,7 +475,7 @@ class The(ResultQuantifier[T]):
     def _yield_when_false_(self, value):
         self._yield_when_false__ = value
 
-    def evaluate(self) -> Union[Iterable[T], T, Dict[SymbolicExpression[T], T]]:
+    def evaluate(self) -> Union[Iterable[T], T, UnificationDict]:
         result = self._evaluate__()
         result = self._process_result_(result)
         self._reset_cache_()

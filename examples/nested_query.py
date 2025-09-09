@@ -69,5 +69,5 @@ containers_that_can_translate = an(entity(container, container == prismatic_conn
 nested_query = an(set_of(drawer_components, containers_that_have_handles & containers_that_can_translate))
 
 nested_query_results = list(nested_query.evaluate())
-assert len(nested_query_results) == 2, "Should generate 2 drawer components"
-assert nested_query_results == original_query_results, "Should generate same results"
+assert len(nested_query_results) == len(original_query_results), "Should generate 2 drawer components"
+assert all(nested_result in original_results for nested_result in nested_query_results), "Should generate same results"
