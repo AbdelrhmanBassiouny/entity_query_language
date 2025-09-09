@@ -1,4 +1,3 @@
-from examples.intro_example import prismatic_connection
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
 from entity_query_language import let, symbolic_mode, an, entity, and_
