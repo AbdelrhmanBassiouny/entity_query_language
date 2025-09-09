@@ -25,7 +25,7 @@ from typing_extensions import List, Tuple, Callable
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache
 from .failures import MultipleSolutionFound, NoSolutionFound
-from .utils import make_list, IDGenerator, is_iterable, render_tree, generate_combinations
+from .utils import IDGenerator, is_iterable, render_tree, generate_combinations
 from .hashed_data import HashedValue, HashedIterable
 
 if TYPE_CHECKING:

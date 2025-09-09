@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, auto
 
 
 class RDREdge(Enum):
@@ -17,4 +17,22 @@ class RDREdge(Enum):
     Then = "then"
     """
     Then edge, the edge that represents the connection to the conclusion.
+    """
+
+
+class InferMode(Enum):
+    """
+    The infer mode of a predicate, whether to infer new relations or retrieve current relations.
+    """
+    Auto = auto()
+    """
+    Inference is done automatically depending on the world state.
+    """
+    Always = auto()
+    """
+    Inference is always performed.
+    """
+    Never = auto()
+    """
+    Inference is never performed.
     """

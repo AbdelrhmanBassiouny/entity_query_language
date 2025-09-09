@@ -1,9 +1,12 @@
+from dataclasses import dataclass
+
 import pytest
 
 from entity_query_language import and_, not_, contains, in_, symbolic_mode
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
-from entity_query_language.entity import an, entity, set_of, let, the, or_, predicate, a
+from entity_query_language import an, entity, set_of, let, the, or_, predicate, a
 from entity_query_language.failures import MultipleSolutionFound
+from entity_query_language.predicate import Predicate
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
 
 
@@ -471,7 +474,7 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
         all_not_handle1_and_not_container1), "All generated items should satisfy query"
 
 
-def test_generate_with_using_predicate(handles_and_containers_world):
+def test_generate_with_using_decorated_predicate(handles_and_containers_world):
     """
     Test the generation of handles in the HandlesAndContainersWorld.
     """
@@ -484,6 +487,28 @@ def test_generate_with_using_predicate(handles_and_containers_world):
     with symbolic_mode():
         query = an(entity(body := let("body", type_=Body, domain=world.bodies),
                           is_handle(body_=body)))
+
+    handles = list(query.evaluate())
+    assert len(handles) == 3, "Should generate at least one handle."
+    assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
+
+
+def test_generate_with_using_inherited_predicate(handles_and_containers_world):
+    """
+    Test the generation of handles in the HandlesAndContainersWorld.
+    """
+    world = handles_and_containers_world
+
+    @dataclass
+    class IsHandle(Predicate):
+        body: Body
+
+        def _infer(self):
+            return self.body.name.startswith("Handle")
+
+    with symbolic_mode():
+        query = an(entity(body := let("body", type_=Body, domain=world.bodies),
+                          IsHandle(body)))
 
     handles = list(query.evaluate())
     assert len(handles) == 3, "Should generate at least one handle."

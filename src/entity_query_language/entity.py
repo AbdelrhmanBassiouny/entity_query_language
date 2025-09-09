@@ -12,7 +12,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dat
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
     chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Not
-from .predicate import Predicate
+from .predicate import SymbolicPredicate, Predicate
 from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
@@ -71,7 +71,7 @@ def _an_or_the(quantifier: Union[Type[An], Type[The]],
         raise ValueError(f'Invalid entity: {entity_}')
 
 
-def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool],
+def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate],
            domain: Optional[Any] = None) -> Entity[T]:
     """
     Create an entity descriptor from a selected variable and its properties.
@@ -212,49 +212,3 @@ def in_(item, container):
     :rtype: Comparator
     """
     return Comparator(container, item, operator.contains)
-
-
-@dataclass_transform()
-def symbol(cls):
-    """
-    Class decorator that makes a class construct symbolic Variables when inside
-    a symbolic_rule context.
-
-    When symbolic mode is active, calling the class returns a Variable bound to
-    either a provided domain or to deferred keyword domain sources.
-
-    :param cls: The class to decorate.
-    :return: The same class with a patched ``__new__``.
-    """
-    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
-
-    def symbolic_new(symbolic_cls, *args, **kwargs):
-        if in_symbolic_mode():
-            if len(args) > 0:
-                return Variable(args[0], symbolic_cls, _domain_=args[1])
-            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
-        return orig_new(symbolic_cls)
-
-    cls.__new__ = symbolic_new
-    return cls
-
-
-def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]]:
-    """
-    Function decorator that constructs a symbolic expression representing the function call
-     when inside a symbolic_rule context.
-
-    When symbolic mode is active, calling the method returns a Call instance which is a SymbolicExpression bound to
-    representing the method call that is not evaluated until the evaluate() method is called on the query/rule.
-
-    :param function: The function to decorate.
-    :return: The decorated function.
-    """
-
-    @wraps(function)
-    def wrapper(*args, **kwargs) -> Optional[Any]:
-        if in_symbolic_mode():
-            return Predicate(function, _args_=args, _kwargs_=kwargs)
-        return function(*args, **kwargs)
-
-    return wrapper
