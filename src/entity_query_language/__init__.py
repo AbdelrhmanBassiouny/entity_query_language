@@ -1,4 +1,4 @@
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 import logging
 
@@ -10,5 +10,5 @@ from .entity import (entity, a, an, let, the, set_of,
 from .predicate import predicate, symbol, Predicate
 from .rule import refinement, alternative, symbolic_mode
 from .conclusion import Add, Set
-from .failures import MultipleSolutionFound, NoSolutionFound
+from .failures import MultipleSolutionFound, NoSolutionFound, ValueNotFoundInCache
 

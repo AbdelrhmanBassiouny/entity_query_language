@@ -10,6 +10,7 @@ from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterab
 
 from .cache_data import IndexedCache
 from .enums import InferMode
+from .failures import ValueNotFoundInCache
 from .hashed_data import HashedValue
 from .hashed_data import T
 from .symbolic import SymbolicExpression, HasDomain, Variable, in_symbolic_mode
@@ -88,7 +89,7 @@ class Predicate(ABC):
     """
     If inference has been performed at least once.
     """
-    symbolic_instance: SymbolicPredicate = field(init=False)
+    symbolic_instance: Optional[SymbolicPredicate] = field(init=False, default=None)
     """
     The symbolic instance of the predicate, this is used to construct the symbolic expression from the predicate.
     """
@@ -118,10 +119,13 @@ class Predicate(ABC):
     def retrieve(self) -> Optional[Any]:
         """
         Retrieve the results of the predicate from the graph.
+
+        :return: The results of the predicate.
+        :raises ValueError: If no results are found.
         """
         for kwargs, result in self.cache[self.edge_name()].retrieve(self.predicate_kwargs):
             return result
-        return None
+        raise ValueNotFoundInCache(self, self.predicate_kwargs)
 
     def infer(self) -> Any:
         """

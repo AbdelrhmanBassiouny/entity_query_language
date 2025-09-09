@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 Custom exception types used by entity_query_language.
 """
-from typing_extensions import TYPE_CHECKING
+from typing_extensions import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from entity_query_language.symbolic import SymbolicExpression
@@ -28,3 +28,11 @@ class NoSolutionFound(Exception):
     """
     def __init__(self, expression: SymbolicExpression):
         super(NoSolutionFound, self).__init__(f"No solution found for expression {expression}")
+
+
+class ValueNotFoundInCache(Exception):
+    """
+    Raised when a value is not found in the cache.
+    """
+    def __init__(self, expression: SymbolicExpression, value: Any):
+        super(ValueNotFoundInCache, self).__init__(f"Value {value} not found in cache for expression {expression}")
