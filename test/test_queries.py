@@ -507,12 +507,18 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
             return self.body.name.startswith("Handle")
 
     with symbolic_mode():
-        query = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                          IsHandle(body)))
+        query = an(entity(a(body:=Body(), domain=world.bodies), is_handle:=IsHandle(body)))
+
+    assert all(IsHandle(b).should_infer for b in world.bodies), "All new items should be inferred not retrieved."
+    IsHandle.clear_cache()
 
     handles = list(query.evaluate())
+
     assert len(handles) == 3, "Should generate at least one handle."
     assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
+    assert all(IsHandle(h).retrieve() for h in handles), "All generated items should satisfy the predicate."
+    assert all(not IsHandle(b).should_infer for b in world.bodies), ("All seen items should not be inferred again"
+                                                                " but retrieved.")
 
 
 def test_nested_query_with_or(handles_and_containers_world):

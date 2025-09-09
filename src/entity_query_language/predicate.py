@@ -5,10 +5,10 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from functools import lru_cache, wraps
-from typing import Union
 
 from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterable, ClassVar, dataclass_transform, Type
 
+from .cache_data import IndexedCache
 from .enums import InferMode
 from .hashed_data import HashedValue
 from .hashed_data import T
@@ -54,21 +54,9 @@ def symbol(cls):
     def symbolic_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
             if issubclass(symbolic_cls, Predicate):
-                init_kwargs = {}
-                arg_number = 0
-                for f in fields(symbolic_cls):
-                    if not f.init:
-                        continue
-                    if args:
-                        init_kwargs[f.name] = args[arg_number]
-                        arg_number += 1
-                    elif f.name in kwargs:
-                        init_kwargs[f.name] = kwargs[f.name]
-                    elif f.default:
-                        init_kwargs[f.name] = f.default
-                    elif f.default_factory:
-                        init_kwargs[f.name] = f.default_factory()
-                return SymbolicPredicate(symbolic_cls, _kwargs_=init_kwargs)
+                instance = orig_new(symbolic_cls)
+                instance.__init__(*args, **kwargs)
+                return instance.symbolic_instance
             if len(args) > 0:
                 return Variable(args[0], symbolic_cls, _domain_=args[1])
             return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
@@ -77,6 +65,7 @@ def symbol(cls):
     cls.__new__ = symbolic_new
     return cls
 
+PredicateCache = Dict[str, IndexedCache]
 
 @symbol
 @dataclass(eq=False)
@@ -90,52 +79,57 @@ class Predicate(ABC):
     This class changes the behavior of functions in symbolic mode to return a SymbolicPredicate instead of evaluating
     the function.
     """
-    infer_mode: InferMode = field(default=InferMode.Always, init=False)
+    infer_mode: InferMode = field(default=InferMode.Auto, init=False)
     """
     The inference mode to use, can be Always, Never, and Auto (requires implementation of _should_infer method that
     decides when to infer and when to retrieve the results).
-    """
-    graph: ClassVar[Dict[Tuple, List]] = defaultdict(list)
-    """
-    An in-memory relational-database that caches results between retrievals, making future retrievals faster.
     """
     inferred_once: ClassVar[bool] = False
     """
     If inference has been performed at least once.
     """
+    symbolic_instance: SymbolicPredicate = field(init=False)
+    """
+    The symbolic instance of the predicate, this is used to construct the symbolic expression from the predicate.
+    """
+    cache: ClassVar[PredicateCache] = defaultdict(IndexedCache)
+    """
+    A mapping from predicate name to a dict mapping edge individual id to its arguments.
+    """
 
-    def _should_infer(self) -> bool:
-        """
-        Predicate specific reasoning on when to infer relations.
-        """
-        raise NotImplementedError()
+    def __post_init__(self):
+        if in_symbolic_mode():
+            self.symbolic_instance = SymbolicPredicate(self, _kwargs_=self.predicate_kwargs)
+        if self.edge_name() not in self.cache:
+            self.cache[self.edge_name()].keys = list(self.predicate_kwargs.keys())
 
-    def infer(self, *args, **kwargs) -> Any:
-        """
-        Evaluate the predicate and infer new relations and add them to the graph.
-        """
-        result = self._infer(*args, **kwargs)
-        # The new relations should be added to the graph here
-        return result
-
-    def __call__(self, *args, **kwargs) -> Any:
+    def __call__(self) -> Any:
         """
         This method wraps the behavior of the predicate by deciding whether to retrieve or to infer and also adds
         new relations to the graph through the infer() method.
         """
         if self.should_infer:
-            self.graph.clear()
-            result = self.infer(*args, **kwargs)
+            result = self.infer()
             self.__class__.inferred_once = True
         else:
-            result = self.retrieve(*args, **kwargs)
+            result = self.retrieve()
         return result
 
-    def retrieve(self, *args, **kwargs) -> Iterable[Any]:
+    def retrieve(self) -> Optional[Any]:
         """
         Retrieve the results of the predicate from the graph.
         """
-        ...
+        for kwargs, result in self.cache[self.edge_name()].retrieve(self.predicate_kwargs):
+            return result
+        return None
+
+    def infer(self) -> Any:
+        """
+        Evaluate the predicate and infer new relations and add them to the graph.
+        """
+        result = self._infer()
+        self.cache[self.edge_name()].insert(self.predicate_kwargs, result)
+        return result
 
     @property
     def should_infer(self) -> bool:
@@ -152,12 +146,37 @@ class Predicate(ABC):
             case _:
                 raise ValueError(f"Invalid infer mode: {self.infer_mode}")
 
+    @classmethod
+    def clear_cache(cls):
+        """
+        Clear the cache of the predicate.
+        """
+        cls.cache[cls.edge_name()].clear()
+
+    @property
+    def predicate_kwargs(self) -> Dict[str, Any]:
+        """
+        The keyword arguments to pass to the predicate.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.init}
+
+    def _should_infer(self) -> bool:
+        """
+        Predicate specific reasoning on when to infer relations.
+        """
+        return not self.cache[self.edge_name()].check(self.predicate_kwargs)
+
+    @classmethod
+    def edge_name(cls):
+        return cls.__name__
+
     @abstractmethod
-    def _infer(self, *args, **kwargs) -> Any:
+    def _infer(self) -> Any:
         """
         Evaluate the predicate with the given arguments and return the results.
         This method should be implemented by subclasses.
         """
+        ...
 
 
 @dataclass(eq=False)
@@ -165,7 +184,7 @@ class SymbolicPredicate(SymbolicExpression[T]):
     """
     A symbolic expression that represents a predicate function applied to symbolic variables.
     """
-    _function_: Union[Callable[[Any], Any], Type[Predicate]]
+    _function_: Callable[[Any], Any]
     _args_: Tuple[Any, ...] = field(default_factory=tuple)
     _kwargs_: Dict[str, Any] = field(default_factory=dict)
     _child_vars_: Dict[str, HasDomain] = field(default_factory=dict)
@@ -211,9 +230,12 @@ class SymbolicPredicate(SymbolicExpression[T]):
             -> Iterable[Dict[int, HashedValue]]:
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         for kwargs in generate_combinations(kwargs_generators):
-            function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
             if self.is_function_a_predicate_instance:
-                function_output = function_output()
+                for k, v in kwargs.items():
+                    setattr(self._function_, k, v[self._child_vars_[k]._id_].value)
+                function_output = self._function_()
+            else:
+                function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
             if (not self._invert_ and function_output) or (self._invert_ and not function_output):
                 self._is_false_ = False
             else:
@@ -227,7 +249,7 @@ class SymbolicPredicate(SymbolicExpression[T]):
 
     @property
     def is_function_a_predicate_instance(self):
-        return isinstance(self._function_, type) and issubclass(self._function_, Predicate)
+        return isinstance(self._function_, Predicate)
 
     def _reset_cache_(self) -> None:
         ...
