@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 
 import pytest
+import hypernetx as hnx
+from line_profiler import profile
 
 from entity_query_language import and_, not_, contains, in_, symbolic_mode
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
@@ -8,6 +10,7 @@ from entity_query_language import an, entity, set_of, let, the, or_, predicate, 
 from entity_query_language.failures import MultipleSolutionFound, ValueNotFoundInCache
 from entity_query_language.predicate import Predicate
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
+from .conf.world.handles_and_containers import World as HandlesAndContainersWorld
 
 
 # disable_caching()
@@ -493,6 +496,7 @@ def test_generate_with_using_decorated_predicate(handles_and_containers_world):
     assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
 
 
+@profile
 def test_generate_with_using_inherited_predicate(handles_and_containers_world):
     """
     Test the generation of handles in the HandlesAndContainersWorld.
@@ -514,6 +518,11 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
             IsHandle(b).retrieve()
 
     handles = list(query.evaluate())
+
+    # import matplotlib.pyplot as plt
+    # plt.subplots(figsize=(4, 4))
+    # hnx.draw(IsHandle.instance_graph)
+    # plt.show()
 
     assert len(handles) == 3, "Should generate at least one handle."
     assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."

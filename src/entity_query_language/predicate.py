@@ -5,12 +5,16 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from functools import lru_cache, wraps
+from typing import FrozenSet
 
+from hypernetx import Hypergraph
+from line_profiler import profile
 from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterable, ClassVar, dataclass_transform, Type
+import hypernetx as hnx
 
-from .cache_data import IndexedCache
+from .cache_data import IndexedCache, SeenSet
 from .enums import InferMode
-from .failures import ValueNotFoundInCache
+from .failures import ValueNotFoundInCache, MultipleCacheEntriesFound
 from .hashed_data import HashedValue
 from .hashed_data import T
 from .symbolic import SymbolicExpression, HasDomain, Variable, in_symbolic_mode
@@ -66,15 +70,22 @@ def symbol(cls):
     cls.__new__ = symbolic_new
     return cls
 
-PredicateCache = Dict[str, IndexedCache]
+
+PredicateCache = hnx.Hypergraph
+
+
+@dataclass
+class ID:
+    value: int = field(default=0)
+
 
 @symbol
 @dataclass(eq=False)
 class Predicate(ABC):
     """
     The super predicate class that represents a relation. This class manages an in memory graph of relations that is
-    used to cache results of functions/predicates and allow retrieval from the graph instead of re-evaluation of the
-    predicate each time. This also means that cache invalidation mechanisms are needed to remove relations that no
+    used to instance_graph results of functions/predicates and allow retrieval from the graph instead of re-evaluation of the
+    predicate each time. This also means that instance_graph invalidation mechanisms are needed to remove relations that no
     longer hold which would have caused incorrect query results.
 
     This class changes the behavior of functions in symbolic mode to return a SymbolicPredicate instead of evaluating
@@ -93,16 +104,27 @@ class Predicate(ABC):
     """
     The symbolic instance of the predicate, this is used to construct the symbolic expression from the predicate.
     """
-    cache: ClassVar[PredicateCache] = defaultdict(IndexedCache)
+    instance_graph: ClassVar[hnx.Hypergraph] = Hypergraph()
     """
-    A mapping from predicate name to a dict mapping edge individual id to its arguments.
+    A hypergraph of predicate instances and the node instances.
     """
+    class_graph: ClassVar[hnx.Hypergraph] = Hypergraph()
+    """
+    A hypergraph of predicate classes and the node classes.
+    """
+    class_instances: ClassVar[Dict[Type, List[str]]] = defaultdict(list)
+    """
+    A mapping from class to the list of instance edges.
+    """
+    seen_kwargs: ClassVar[Dict[Type, SeenSet]] = defaultdict(SeenSet)
+    """
+    A mapping from predicate class to all seen keyword arguments for that predicate class.
+    """
+    id_: ClassVar[ID] = ID()
 
     def __post_init__(self):
         if in_symbolic_mode():
             self.symbolic_instance = SymbolicPredicate(self, _kwargs_=self.predicate_kwargs)
-        if self.edge_name() not in self.cache:
-            self.cache[self.edge_name()].keys = list(self.predicate_kwargs.keys())
 
     def __call__(self) -> Any:
         """
@@ -123,18 +145,33 @@ class Predicate(ABC):
         :return: The results of the predicate.
         :raises ValueError: If no results are found.
         """
-        for kwargs, result in self.cache[self.edge_name()].retrieve(self.predicate_kwargs):
-            return result
-        raise ValueNotFoundInCache(self, self.predicate_kwargs)
+        matching_edges = [e for e in self.class_instances[type(self)]
+                          if set(self.instance_graph.edges[e]) == self.nodes_instances_data.keys()]
+        if len(matching_edges) == 0:
+            raise ValueNotFoundInCache(self, self.predicate_kwargs)
+        elif len(matching_edges) > 1:
+            raise MultipleCacheEntriesFound(self, self.predicate_kwargs, matching_edges)
+        return self.instance_graph.edges[matching_edges[0]].value
 
+    @profile
     def infer(self) -> Any:
         """
         Evaluate the predicate and infer new relations and add them to the graph.
         """
         result = self._infer()
-        self.cache[self.edge_name()].insert(self.predicate_kwargs, result)
+        self.id_.value += 1
+        self.seen_kwargs[type(self)].add(self.predicate_kwargs)
+        self.class_instances[type(self)].append(self.instance_edge_name)
+        self.instance_graph.add_edge(self.instance_edge_name, weight=int(result), value=result)
+        self.instance_graph.add_nodes_to_edges({self.instance_edge_name: self.nodes_instances_data})
         return result
 
+    @property
+    def nodes_instances_data(self) -> Dict[str, Dict[str, Any]]:
+        return {f"{name}_{id(v)}": {'n_type': type(v), 'n_value': v}
+                for name, v in self.predicate_kwargs.items()}
+
+    @profile
     @property
     def should_infer(self) -> bool:
         """
@@ -153,9 +190,20 @@ class Predicate(ABC):
     @classmethod
     def clear_cache(cls):
         """
-        Clear the cache of the predicate.
+        Clear the instance_graph of the predicate.
         """
-        cls.cache[cls.edge_name()].clear()
+        cls.instance_graph[cls.class_edge_name()].clear()
+
+    def _should_infer(self) -> bool:
+        """
+        Predicate specific reasoning on when to infer relations.
+        """
+        return not self.seen_kwargs[type(self)].check(self.predicate_kwargs)
+
+
+    @property
+    def instance_edge_name(self) -> str:
+        return f"{self.class_edge_name()}_{self.id_.value}"
 
     @property
     def predicate_kwargs(self) -> Dict[str, Any]:
@@ -164,14 +212,8 @@ class Predicate(ABC):
         """
         return {f.name: getattr(self, f.name) for f in fields(self) if f.init}
 
-    def _should_infer(self) -> bool:
-        """
-        Predicate specific reasoning on when to infer relations.
-        """
-        return not self.cache[self.edge_name()].check(self.predicate_kwargs)
-
     @classmethod
-    def edge_name(cls):
+    def class_edge_name(cls):
         return cls.__name__
 
     @abstractmethod
