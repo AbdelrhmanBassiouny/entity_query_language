@@ -10,7 +10,7 @@ from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterab
 
 from .cache_data import IndexedCache
 from .enums import InferMode
-from .failures import ValueNotFoundInCache
+from .failures import ValueNotFoundInCache, MoreThanOneCacheEntryMatched
 from .hashed_data import HashedValue
 from .hashed_data import T
 from .symbolic import SymbolicExpression, HasDomain, Variable, in_symbolic_mode
@@ -32,7 +32,10 @@ def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]
     @wraps(function)
     def wrapper(*args, **kwargs) -> Optional[Any]:
         if in_symbolic_mode():
-            return SymbolicPredicate(function, _args_=args, _kwargs_=kwargs)
+            function_arg_names = [pname for pname, p in inspect.signature(function).parameters.items()
+                                  if p.default == inspect.Parameter.empty]
+            kwargs.update(dict(zip(function_arg_names, args)))
+            return Variable(function.__name__, function, _cls_kwargs_=kwargs)
         return function(*args, **kwargs)
 
     return wrapper
@@ -54,19 +57,16 @@ def symbol(cls):
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
-            if issubclass(symbolic_cls, Predicate):
-                instance = orig_new(symbolic_cls)
-                instance.__init__(*args, **kwargs)
-                return instance.symbolic_instance
             if len(args) > 0:
                 return Variable(args[0], symbolic_cls, _domain_=args[1])
-            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs)
+            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs,
+                            _is_predicate_=issubclass(symbolic_cls, Predicate))
         return orig_new(symbolic_cls)
 
     cls.__new__ = symbolic_new
     return cls
 
-PredicateCache = Dict[str, IndexedCache]
+PredicateCache = Dict[Type, IndexedCache]
 
 @symbol
 @dataclass(eq=False)
@@ -89,20 +89,14 @@ class Predicate(ABC):
     """
     If inference has been performed at least once.
     """
-    symbolic_instance: Optional[SymbolicPredicate] = field(init=False, default=None)
-    """
-    The symbolic instance of the predicate, this is used to construct the symbolic expression from the predicate.
-    """
-    cache: ClassVar[PredicateCache] = defaultdict(IndexedCache)
+    all_predicates_cache: ClassVar[PredicateCache] = defaultdict(IndexedCache)
     """
     A mapping from predicate name to a dict mapping edge individual id to its arguments.
     """
 
     def __post_init__(self):
-        if in_symbolic_mode():
-            self.symbolic_instance = SymbolicPredicate(self, _kwargs_=self.predicate_kwargs)
-        if self.edge_name() not in self.cache:
-            self.cache[self.edge_name()].keys = list(self.predicate_kwargs.keys())
+        if type(self) not in self.all_predicates_cache:
+            self.cache.keys = list(self.predicate_kwargs.keys())
 
     def __call__(self) -> Any:
         """
@@ -113,26 +107,41 @@ class Predicate(ABC):
             result = self.infer()
             self.__class__.inferred_once = True
         else:
-            result = self.retrieve()
+            result = self.retrieve_one()[1]
         return result
 
-    def retrieve(self) -> Optional[Any]:
+    def retrieve_one(self) -> Tuple[Dict, Any]:
         """
-        Retrieve the results of the predicate from the graph.
+        Retrieve the result of the predicate from the graph, should only return one result.
 
         :return: The results of the predicate.
         :raises ValueError: If no results are found.
+        :raises MoreThanOneCacheEntryMatched: If more than one result is found.
         """
-        for kwargs, result in self.cache[self.edge_name()].retrieve(self.predicate_kwargs):
-            return result
-        raise ValueNotFoundInCache(self, self.predicate_kwargs)
+        val_gen = self.retrieve()
+        result = None
+        try:
+            result = next(val_gen)
+            result2 = next(val_gen)
+            raise MoreThanOneCacheEntryMatched(self, self.predicate_kwargs, [result, result2])
+        except StopIteration:
+            if result is not None:
+                return result
+            raise ValueNotFoundInCache(self, self.predicate_kwargs)
+
+    def retrieve(self) -> Iterable[Tuple[Dict, Any]]:
+        """
+        Retrieve the results of the predicate from the graph.
+        """
+        yield from self.cache.retrieve(self.predicate_kwargs)
+
 
     def infer(self) -> Any:
         """
         Evaluate the predicate and infer new relations and add them to the graph.
         """
         result = self._infer()
-        self.cache[self.edge_name()].insert(self.predicate_kwargs, result)
+        self.cache.insert(self.predicate_kwargs, result)
         return result
 
     @property
@@ -155,7 +164,15 @@ class Predicate(ABC):
         """
         Clear the cache of the predicate.
         """
-        cls.cache[cls.edge_name()].clear()
+        cls.all_predicates_cache[cls].clear()
+
+    @classmethod
+    def clear_all_predicate_caches(cls):
+        """
+        Clear the caches of all predicates.
+        """
+        for cache in cls.all_predicates_cache.values():
+            cache.clear()
 
     @property
     def predicate_kwargs(self) -> Dict[str, Any]:
@@ -168,7 +185,11 @@ class Predicate(ABC):
         """
         Predicate specific reasoning on when to infer relations.
         """
-        return not self.cache[self.edge_name()].check(self.predicate_kwargs)
+        return not self.cache.check(self.predicate_kwargs)
+
+    @property
+    def cache(self) -> IndexedCache:
+        return self.all_predicates_cache[type(self)]
 
     @classmethod
     def edge_name(cls):
@@ -180,80 +201,4 @@ class Predicate(ABC):
         Evaluate the predicate with the given arguments and return the results.
         This method should be implemented by subclasses.
         """
-        ...
-
-
-@dataclass(eq=False)
-class SymbolicPredicate(SymbolicExpression[T]):
-    """
-    A symbolic expression that represents a predicate function applied to symbolic variables.
-    """
-    _function_: Callable[[Any], Any]
-    _args_: Tuple[Any, ...] = field(default_factory=tuple)
-    _kwargs_: Dict[str, Any] = field(default_factory=dict)
-    _child_vars_: Dict[str, HasDomain] = field(default_factory=dict)
-    _invert_: bool = field(init=False, default=False)
-
-    def __post_init__(self):
-        if type(self) is SymbolicPredicate:
-            self._child_ = None
-        if not self.is_function_a_predicate_instance:
-            function_arg_names = [pname for pname, p in inspect.signature(self._function_).parameters.items()
-                                  if p.default == inspect.Parameter.empty]
-            self._kwargs_.update(dict(zip(function_arg_names, self._args_)))
-            if not all(name in self._kwargs_ for name in function_arg_names if name not in ['args', 'kwargs']):
-                raise ValueError(f"The number of arguments of the predicate function {self._name_} "
-                                 f"does not match the number of provided arguments.")
-        if self._kwargs_:
-            for k, v in self._kwargs_.items():
-                self._update_child_vars_(v, name=k)
-        super().__post_init__()
-        self._update_children_(*self._child_vars_.values())
-
-    def _update_child_vars_(self, source: Any, name: Optional[str] = None):
-        if not isinstance(source, HasDomain):
-            source = Variable._from_domain_(source, name=name)
-        self._child_vars_[name] = source
-
-    @property
-    def _name_(self):
-        args_kwargs_str = f"({','.join(f'{k}={v._name_}' for k, v in self._child_vars_.items())})"
-        if self.is_function_a_predicate_instance:
-            return self._function_.__class__.__name__ + args_kwargs_str
-        return f"{self._function_.__name__}{args_kwargs_str}"
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        variables = []
-        for k, v in self._child_vars_.items():
-            variables.extend(v._all_variable_instances_)
-        return variables
-
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
-            -> Iterable[Dict[int, HashedValue]]:
-        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
-        for kwargs in generate_combinations(kwargs_generators):
-            if self.is_function_a_predicate_instance:
-                for k, v in kwargs.items():
-                    setattr(self._function_, k, v[self._child_vars_[k]._id_].value)
-                function_output = self._function_()
-            else:
-                function_output = self._function_(**{k: v[self._child_vars_[k]._id_].value for k, v in kwargs.items()})
-            if (not self._invert_ and function_output) or (self._invert_ and not function_output):
-                self._is_false_ = False
-            else:
-                self._is_false_ = True
-            if self._yield_when_false_ or not self._is_false_:
-                values = {}
-                for k, v in kwargs.items():
-                    values.update(v)
-                values[self._id_] = HashedValue(function_output)
-                yield values
-
-    @property
-    def is_function_a_predicate_instance(self):
-        return isinstance(self._function_, Predicate)
-
-    def _reset_cache_(self) -> None:
         ...

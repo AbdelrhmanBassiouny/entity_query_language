@@ -6,7 +6,7 @@ from entity_query_language import and_, not_, contains, in_, symbolic_mode
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
 from entity_query_language import an, entity, set_of, let, the, or_, predicate, a
 from entity_query_language.failures import MultipleSolutionFound, ValueNotFoundInCache
-from entity_query_language.predicate import Predicate
+from entity_query_language.predicate import Predicate, symbol
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
 
 
@@ -507,20 +507,20 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
             return self.body.name.startswith("Handle")
 
     with symbolic_mode():
-        query = an(entity(a(body:=Body(), domain=world.bodies), is_handle:=IsHandle(body)))
+        query = an(entity(a(body:=Body(), domain=world.bodies), is_handle:=IsHandle(body=body)))
 
     for b in world.bodies:
         with pytest.raises(ValueNotFoundInCache):
-            IsHandle(b).retrieve()
+            IsHandle(b).retrieve_one()
 
     handles = list(query.evaluate())
 
     assert len(handles) == 3, "Should generate at least one handle."
     assert all(isinstance(h, Handle) for h in handles), "All generated items should be of type Handle."
-    assert all(IsHandle(h).retrieve() for h in handles), "All generated items should satisfy the predicate."
+    assert all(IsHandle(h).retrieve_one()[1] for h in handles), "All generated items should satisfy the predicate."
     assert all(not IsHandle(b).should_infer for b in world.bodies), ("All seen items should not be inferred again"
                                                                 " but retrieved.")
-    assert all(not IsHandle(b).retrieve() for b in world.bodies if b not in handles), ("All not generated items "
+    assert all(not IsHandle(b).retrieve_one()[1] for b in world.bodies if b not in handles), ("All not generated items "
                                                                                        "should not satisfy the "
                                                                                        "predicate.")
 

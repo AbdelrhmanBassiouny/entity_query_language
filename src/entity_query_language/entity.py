@@ -12,7 +12,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dat
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
     chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Not
-from .predicate import SymbolicPredicate, Predicate
+from .predicate import Predicate
 from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"

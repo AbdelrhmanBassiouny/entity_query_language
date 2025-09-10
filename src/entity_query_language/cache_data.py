@@ -14,7 +14,7 @@ caching layer. It also exposes a runtime switch to enable/disable caching.
 import contextvars
 from collections import defaultdict, UserDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Iterable
+from typing import Dict, List, Any, Iterable, Hashable
 
 
 @dataclass
@@ -196,7 +196,7 @@ class IndexedCache:
     :ivar enter_count: Diagnostic counter for retrieval entries.
     :ivar search_count: Diagnostic counter for wildcard searches.
     """
-    keys: List[int] = field(default_factory=list)
+    keys: List[Hashable] = field(default_factory=list)
     seen_set: SeenSet = field(default_factory=SeenSet, init=False)
     cache: CacheDict = field(default_factory=CacheDict, init=False)
     enter_count: int = field(default=0, init=False)

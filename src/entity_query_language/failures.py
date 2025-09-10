@@ -1,11 +1,15 @@
 from __future__ import annotations
+
+from typing import List
+
 """
 Custom exception types used by entity_query_language.
 """
 from typing_extensions import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from entity_query_language.symbolic import SymbolicExpression
+    from .symbolic import SymbolicExpression
+    from .predicate import Predicate
 
 
 class MultipleSolutionFound(Exception):
@@ -36,3 +40,9 @@ class ValueNotFoundInCache(Exception):
     """
     def __init__(self, expression: SymbolicExpression, value: Any):
         super(ValueNotFoundInCache, self).__init__(f"Value {value} not found in cache for expression {expression}")
+
+
+class MoreThanOneCacheEntryMatched(Exception):
+    def __init__(self, predicate: Predicate, value: Any, results: List[Any]):
+        super(MoreThanOneCacheEntryMatched, self).__init__(f"More than one cache entry matched for predicate "
+                                                           f"{predicate} with value {value}. Results: {results}")

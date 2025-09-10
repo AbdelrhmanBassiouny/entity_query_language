@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections import UserDict
+import sys
+from collections import UserDict, defaultdict
 from copy import copy
 
 from . import logger
@@ -82,6 +83,10 @@ class SymbolicExpression(Generic[T], ABC):
     _is_false_: bool = field(init=False, repr=False, default=False)
     _seen_parent_values_: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
                                                       init=False)
+    _all_symbols_cache_: ClassVar[Dict[Type, IndexedCache]] = defaultdict(IndexedCache)
+    """
+    A mapping from class type to an indexed cache of all seen inputs and outputs of the symbol. 
+    """
 
     def __post_init__(self):
         self._id_ = id_generator(self)
@@ -846,6 +851,8 @@ class Variable(HasDomain[T]):
     _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
     _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
     _properties_: Optional[Iterable[Union[SymbolicExpression,bool]]] = field(default=None)
+    _invert_: bool = field(default=False)
+    _is_predicate_: bool = field(default=False)
 
     def __post_init__(self):
         if self._cls_kwargs_ and not self._type_:
@@ -861,7 +868,7 @@ class Variable(HasDomain[T]):
                 else:
                     domain_sources.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
             self._domain_sources_.extend(domain_sources)
-            # _ = self._update_children_(*domain_sources)
+            self._update_children_(*domain_sources)
             self._properties_ = (getattr(self, k) == v for k, v in self._cls_kwargs_.items())
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -872,16 +879,33 @@ class Variable(HasDomain[T]):
         if self._id_ in sources:
             yield {self._id_: sources[self._id_]}
         elif self._type_ is not None and not self._domain_:
-            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else HashedValue([v])
+            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else [HashedValue(v)]
                                  for k, v in self._cls_kwargs_.items()}
             for kwargs in generate_combinations(kwargs_generators):
                 instance = self._type_(**{k: v[self._get_var_id_(self._cls_kwargs_[k])].value for k, v in kwargs.items()})
-                values = {self._id_: HashedValue(instance)}
-                for k, v in kwargs.items():
-                    values.update(v)
-                yield {self._id_: HashedValue(instance)}
+                if self._is_predicate_:
+                    instance = instance()
+                yield from self._process_output_and_update_values_(instance, **kwargs)
         else:
             yield from self
+
+    def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:
+        """
+        Process the output of the predicate/variable and get the results.
+
+        :param function_output: The output of the predicate.
+        :param kwargs: The keyword arguments of the predicate/variable.
+        :return: The results' dictionary.
+        """
+        if (not self._invert_ and function_output) or (self._invert_ and not function_output):
+            self._is_false_ = False
+        else:
+            self._is_false_ = True
+        if self._yield_when_false_ or not self._is_false_:
+            values = {self._id_: HashedValue(function_output)}
+            for k, v in kwargs.items():
+                values.update(v)
+            yield values
 
     @property
     def _name_(self):
