@@ -162,8 +162,8 @@ class Predicate(ABC):
         self.id_.value += 1
         self.seen_kwargs[type(self)].add(self.predicate_kwargs)
         self.class_instances[type(self)].append(self.instance_edge_name)
-        self.instance_graph.add_edge(self.instance_edge_name, weight=int(result), value=result)
         self.instance_graph.add_nodes_to_edges({self.instance_edge_name: self.nodes_instances_data})
+        self.instance_graph.edges[self.instance_edge_name].value = result
         return result
 
     @property
