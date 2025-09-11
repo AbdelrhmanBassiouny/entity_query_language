@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import sys
 from collections import UserDict, defaultdict
 from copy import copy
 
 from . import logger
+from .enums import EQLMode, PredicateType
 
 """
 Core symbolic expression system used to build and evaluate entity queries.
@@ -32,25 +32,26 @@ from .hashed_data import HashedValue, HashedIterable
 if TYPE_CHECKING:
     from .conclusion import Conclusion
 
-_symbolic_mode = contextvars.ContextVar("symbolic_mode", default=False)
+_symbolic_mode = contextvars.ContextVar("symbolic_mode", default=None)
 
 
-def _set_symbolic_mode(value: bool):
+def _set_symbolic_mode(mode: EQLMode):
     """
-    Set whether symbolic construction mode is active.
+    Set symbolic construction mode.
 
-    :param value: True to enable symbolic mode, False to disable it.
+    :param mode: Can be Query or Rule.
     """
-    _symbolic_mode.set(value)
+    _symbolic_mode.set(mode)
 
 
-def in_symbolic_mode():
+def in_symbolic_mode(mode: Optional[EQLMode] = None) -> bool:
     """
     Check whether symbolic construction mode is currently active.
 
     :returns: True if symbolic mode is enabled, otherwise False.
     """
-    return _symbolic_mode.get()
+    current_mode = _symbolic_mode.get()
+    return current_mode == mode if mode else current_mode is not None
 
 
 T = TypeVar("T")
@@ -83,10 +84,6 @@ class SymbolicExpression(Generic[T], ABC):
     _is_false_: bool = field(init=False, repr=False, default=False)
     _seen_parent_values_: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
                                                       init=False)
-    _all_symbols_cache_: ClassVar[Dict[Type, IndexedCache]] = defaultdict(IndexedCache)
-    """
-    A mapping from class type to an indexed cache of all seen inputs and outputs of the symbol. 
-    """
 
     def __post_init__(self):
         self._id_ = id_generator(self)
@@ -107,7 +104,8 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Variable._from_domain_([v])
         for k, v in children.items():
-            if v._node_.parent is not None and isinstance(v, (HasDomain, Source, ResultQuantifier, QueryObjectDescriptor)):
+            if v._node_.parent is not None and isinstance(v,
+                                                          (HasDomain, Source, ResultQuantifier, QueryObjectDescriptor)):
                 children[k] = self._copy_child_expression_(v)
             children[k]._node_.parent = self._node_
         return tuple(children.values())
@@ -127,13 +125,12 @@ class SymbolicExpression(Generic[T], ABC):
         self._node_ = Node(name)
         self._node_._expression_ = self
 
-    @abstractmethod
     def _reset_cache_(self) -> None:
         """
         Reset the cache of the symbolic expression.
         This method should be implemented by subclasses.
         """
-        ...
+        self._seen_parent_values_ = {True: SeenSet(), False: SeenSet()}
 
     @property
     def _yield_when_false_(self) -> bool:
@@ -339,9 +336,6 @@ class Source(SymbolicExpression[T]):
             self._child_ = None
         super().__post_init__()
 
-    def _reset_cache_(self) -> None:
-        ...
-
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
@@ -422,8 +416,7 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         ...
 
     def _reset_cache_(self) -> None:
-        self._seen_parent_values_[True].clear()
-        self._seen_parent_values_[False].clear()
+        super()._reset_cache_()
         self._child_._reset_cache_()
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
@@ -440,7 +433,6 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
                 vars.update(var._unique_variables_)
         return vars
 
-
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
@@ -452,7 +444,7 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
         elif isinstance(self._child_, SetOf):
             selected_variables_ids = [v._id_ for v in self._child_.selected_variables]
             return UnificationDict({self._id_expression_map_[var_id]: value
-                    for var_id, value in result.items() if var_id in selected_variables_ids})
+                                    for var_id, value in result.items() if var_id in selected_variables_ids})
         else:
             raise NotImplementedError(f"Unknown child type {type(self._child_)}")
 
@@ -461,6 +453,7 @@ class UnificationDict(UserDict):
     """
     A dictionary which maps all expressions that are on a single variable to the original variable id.
     """
+
     def __getitem__(self, key: SymbolicExpression[T]) -> T:
         key = key._id_expression_map_[key._id_]
         return super().__getitem__(key).value
@@ -511,7 +504,7 @@ class The(ResultQuantifier[T]):
 class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
-    def evaluate(self) -> Iterable[Union[T, Dict[Union[T,SymbolicExpression[T]], T]]]:
+    def evaluate(self) -> Iterable[Union[T, Dict[Union[T, SymbolicExpression[T]], T]]]:
         results = self._evaluate__()
         yield from map(self._process_result_, results)
         self._reset_cache_()
@@ -534,10 +527,18 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
     also describes the condition(s)/properties of the queried object(s).
     """
     _child_: Optional[SymbolicExpression[T]] = field(default=None)
-    _warned_vars_: typing.Set = field(default_factory=set, init=False)
+    warned_vars: typing.Set = field(default_factory=set, init=False)
+    rule_mode: bool = field(default=False)
+    selected_variables: List[SymbolicExpression[T]] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if in_symbolic_mode(EQLMode.Rule):
+            self.rule_mode = True
 
     def _evaluate_(self, selected_vars: Optional[Iterable[HasDomain]] = None,
                    sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        self._inform_selected_variables_that_they_should_be_inferred_()
         sources = sources or {}
         if self._child_:
             child_values = self._child_._evaluate__(sources)
@@ -567,8 +568,7 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
                     yield v
 
     def _reset_cache_(self) -> None:
-        self._seen_parent_values_[True].clear()
-        self._seen_parent_values_[False].clear()
+        super()._reset_cache_()
         if self._child_:
             self._child_._reset_cache_()
 
@@ -586,8 +586,8 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
         unbound_variables_with_domain = HashedIterable()
         for var in unbound_variables:
             if var.value._domain_ and len(var.value._domain_.values) > 20:
-                if var not in self._warned_vars_:
-                    self._warned_vars_.add(var)
+                if var not in self.warned_vars:
+                    self.warned_vars.add(var)
                     unbound_variables_with_domain.add(var)
         if unbound_variables_with_domain:
             logger.warning(f"\nCartesian Product: "
@@ -602,6 +602,11 @@ class QueryObjectDescriptor(SymbolicExpression[T], ABC):
             return self._child_._all_variable_instances_
         else:
             return []
+
+    def _inform_selected_variables_that_they_should_be_inferred_(self):
+        if self.rule_mode and self._child_ and self._child_ is self._conditions_root_:
+            for selected_variable in self.selected_variables:
+                selected_variable._is_inferred_ = True
 
     def __repr__(self):
         return self._name_
@@ -633,8 +638,8 @@ class SetOf(QueryObjectDescriptor[T]):
         for sol in sol_gen:
             sol.update(sources)
             if self.selected_variables:
-                var_val =  {var._id_: next(var._evaluate__(sol))[var._id_]
-                            for var in self.selected_variables if var._id_ in sol}
+                var_val = {var._id_: next(var._evaluate__(sol))[var._id_]
+                           for var in self.selected_variables if var._id_ in sol}
                 sol.update(var_val)
                 yield sol
             else:
@@ -670,6 +675,7 @@ class Entity(QueryObjectDescriptor[T]):
         """
         if self.domain is not None:
             if self.selected_variable is not None:
+                self.selected_variables.append(self.selected_variable)
                 type_ = self.selected_variable._type_
                 child = self.domain
                 if not isinstance(child, (Source, HasDomain)):
@@ -681,7 +687,7 @@ class Entity(QueryObjectDescriptor[T]):
         """
         Update the child expression with the properties of the variable.
         """
-        if self.selected_variable and self.selected_variable._properties_ is not None and self.domain:
+        if self.selected_variable and self.selected_variable._properties_ is not None:
             if self._child_:
                 self._update_child_(chained_logic(AND, self._child_, *self.selected_variable._properties_))
             else:
@@ -737,11 +743,11 @@ class HasDomain(SymbolicExpression[T], ABC):
 
     def _update_domain_(self, domain):
         if domain is not None:
-            if isinstance(domain, (HasDomain, Source)):
+            if isinstance(domain, SymbolicExpression):
                 self._domain_sources_.append(domain)
             if isinstance(domain, Source):
                 domain = domain._evaluate__().value
-            elif isinstance(domain, HasDomain):
+            elif isinstance(domain, SymbolicExpression):
                 domain = (next(iter(v.values())) for v in domain._evaluate__())
             elif not is_iterable(domain):
                 domain = [HashedValue(domain)]
@@ -749,9 +755,6 @@ class HasDomain(SymbolicExpression[T], ABC):
                 self._domain_.set_iterable(domain)
             else:
                 self._domain_ = HashedIterable(domain)
-
-    def _reset_cache_(self) -> None:
-        ...
 
     def __iter__(self):
         for v in self._domain_:
@@ -807,7 +810,7 @@ class DomainFilter(HasDomain, ABC):
 
     def __iter__(self):
         yield from map(lambda v: HashedIterable(values={self._id_: v}),
-            filter(self._filter_func_, self._child_._evaluate__()))
+                       filter(self._filter_func_, self._child_._evaluate__()))
 
     def _filter_func_(self, v: Any) -> bool:
         """
@@ -847,47 +850,131 @@ class HasType(DomainFilter):
 @dataclass(eq=False)
 class Variable(HasDomain[T]):
     _name__: str
+    """
+    The name of the variable.
+    """
     _type_: Type
-    _cls_kwargs_: Dict[str, Any] = field(default_factory=dict)
+    """
+    The class that this variable represents.
+    """
+    _kwargs_: Dict[str, Any] = field(default_factory=dict)
+    """
+    The properties of the variable as keyword arguments.
+    """
     _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
-    _properties_: Optional[Iterable[Union[SymbolicExpression,bool]]] = field(default=None)
     _invert_: bool = field(default=False)
-    _is_predicate_: bool = field(default=False)
+    _properties_: Optional[Iterable[Union[SymbolicExpression, bool]]] = field(default=None)
+    """
+    The properties of the variable as an iterable of constraints (i.e. comparators)
+    """
+    _predicate_type_: Optional[PredicateType] = field(default=None)
+    """
+    If this symbol is an instance of the Predicate class.
+    """
+    _is_inferred_: bool = field(default=False)
+    """
+    Whether this variable should be inferred.
+    """
+    _cache_: ClassVar[Dict[Type, IndexedCache]] = defaultdict(IndexedCache)
+    """
+    A mapping from variable type to an indexed cache of all seen inputs and outputs of the variable type. 
+    """
+    _child_vars_: Optional[Dict[str, Variable]] = field(default=None, init=False)
+    """
+    A dictionary mapping child variable names to variables, these are from the _kwargs_ dictionary. 
+    """
 
     def __post_init__(self):
-        if self._cls_kwargs_ and not self._type_:
+        self._validate_inputs_and_fill_missing_ones_()
+        super().__post_init__()
+        self._update_domain_sources_from_kwargs_()
+
+    def _validate_inputs_and_fill_missing_ones_(self):
+        if self._kwargs_ and not self._type_:
             raise ValueError(f"Variable {self._name_} has class keyword arguments but no type is specified.")
         if type(self) is Variable:
             self._child_ = None
-        super().__post_init__()
-        if self._cls_kwargs_:
+
+    def _update_domain_sources_from_kwargs_(self):
+        if self._kwargs_:
             domain_sources = []
-            for k, v in self._cls_kwargs_.items():
-                if isinstance(v, HasDomain):
+            self._child_vars_ = {}
+            for k, v in self._kwargs_.items():
+                if isinstance(v, SymbolicExpression):
                     domain_sources.append(v)
                 else:
                     domain_sources.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
+                self._child_vars_[k] = domain_sources[-1]
             self._domain_sources_.extend(domain_sources)
             self._update_children_(*domain_sources)
-            self._properties_ = (getattr(self, k) == v for k, v in self._cls_kwargs_.items())
+            self._properties_ = (getattr(self, k) == v for k, v in self._kwargs_.items())
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
-        A variable does not need to evaluate anything by default.
+        A variable either is already bound in sources by other constraints (Symbolic Expressions).,
+        or has no domain and will instantiate new values by constructing the type if the type is given,
+        or will yield from current domain if exists.
         """
         sources = sources or {}
         if self._id_ in sources:
             yield {self._id_: sources[self._id_]}
-        elif self._type_ is not None and not self._domain_:
-            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else [HashedValue(v)]
-                                 for k, v in self._cls_kwargs_.items()}
-            for kwargs in generate_combinations(kwargs_generators):
-                instance = self._type_(**{k: v[self._get_var_id_(self._cls_kwargs_[k])].value for k, v in kwargs.items()})
-                if self._is_predicate_:
-                    instance = instance()
-                yield from self._process_output_and_update_values_(instance, **kwargs)
-        else:
+        elif self._domain_:
             yield from self
+        elif self._type_:
+            yield from self._instantiate_new_values_or_yield_from_cache_(sources)
+
+    def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
+            -> Iterable[Dict[int, HashedValue]]:
+        if self._child_vars_:
+            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else [HashedValue(v)]
+                                 for k, v in self._child_vars_.items() if v._id_ in sources}
+            kwargs_combinations = generate_combinations(kwargs_generators)
+        else:
+            kwargs_combinations = [{}]
+        for kwargs in kwargs_combinations:
+            retrieved = False
+            for v in self._search_and_yield_from_cache_(**kwargs):
+                retrieved = True
+                yield v
+            if not retrieved and (self._is_inferred_ or self._is_predicate_):
+                unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] for k, v in kwargs.items()}
+                unbound_kwargs = {k: v._evaluate__(sources)
+                                  for k, v in self._child_vars_.items() if k not in unwrapped_hashed_kwargs}
+                for extra_kwargs in generate_combinations(unbound_kwargs):
+                    kwargs.update(extra_kwargs)
+                    unwrapped_hashed_kwargs.update({k: v[self._get_var_id_(self._child_vars_[k])]
+                                                    for k, v in extra_kwargs.items()})
+                    instance = self._type_(**{k: v.value for k, v in unwrapped_hashed_kwargs.items()})
+                    yield from self._process_output_and_update_values_(instance, **kwargs)
+
+    @property
+    def _is_predicate_(self):
+        return self._predicate_type_ in [PredicateType.SubClassOfPredicate, PredicateType.DecoratedMethod]
+
+    def _search_and_yield_from_cache_(self, **kwargs):
+        unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] for k, v in kwargs.items()}
+        if self._type_ not in self._cache_.keys() or not self._cache_[self._type_].keys:
+            self._cache_[self._type_].keys = list(unwrapped_hashed_kwargs.keys())
+        cache_keys = [self._type_]
+        if isinstance(self._type_, type):
+            for t in self._cache_.keys():
+                if t is self._type_:
+                    continue
+                if isinstance(t, type) and issubclass(t, self._type_):
+                    cache_keys.append(t)
+        for t in cache_keys:
+            # if unwrapped_hashed_kwargs:
+            #     # Only check the cache if there are kwargs because otherwise this means we need all values.
+            #     seen = self._cache_[t].check(unwrapped_hashed_kwargs)
+            # else:
+            #     # kwargs are empty so no constraints on the values, so we need all seen values if they exist.
+            #     seen = len(self._cache_[t].cache)
+            # if seen:
+            for found_kwargs, value in self._cache_[t].retrieve(unwrapped_hashed_kwargs):
+                found_kwargs = {k: {self._get_var_id_(self._child_vars_[k]): v} for k, v in found_kwargs.items()
+                                if k in self._child_vars_}
+                kwargs.update(found_kwargs)
+                yield from self._process_output_and_update_values_(value.value, **kwargs)
 
     def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:
         """
@@ -897,6 +984,8 @@ class Variable(HasDomain[T]):
         :param kwargs: The keyword arguments of the predicate/variable.
         :return: The results' dictionary.
         """
+        if self._predicate_type_ == PredicateType.SubClassOfPredicate:
+            function_output = function_output()
         if (not self._invert_ and function_output) or (self._invert_ and not function_output):
             self._is_false_ = False
         else:
@@ -914,10 +1003,13 @@ class Variable(HasDomain[T]):
     @classmethod
     def _from_domain_(cls, iterable, clazz: Optional[Type] = None,
                       name: Optional[str] = None) -> Variable:
-        if not is_iterable(iterable):
+        if not isinstance(iterable, SymbolicExpression) and not is_iterable(iterable):
             iterable = HashedIterable([iterable])
         if not clazz:
-            clazz = type(next(iter(iterable)))
+            if isinstance(iterable, (Entity, ResultQuantifier, Variable)):
+                clazz = iterable._parent_variable_._type_
+            else:
+                clazz = type(next(iter(iterable)))
         if name is None:
             if clazz is not None:
                 name = clazz.__name__
@@ -929,8 +1021,8 @@ class Variable(HasDomain[T]):
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
         variables = [self]
-        if self._cls_kwargs_:
-            for v in self._cls_kwargs_.values():
+        if self._kwargs_:
+            for v in self._kwargs_.values():
                 if isinstance(v, HasDomain):
                     variables.extend(v._all_variable_instances_)
         return variables
@@ -971,7 +1063,6 @@ class DomainMapping(HasDomain, ABC):
             if self._yield_when_false_ or not self._is_false_:
                 child_v[self._id_] = v
                 yield child_v
-
 
     @abstractmethod
     def _apply_mapping_(self, value: HashedValue) -> HashedValue:
@@ -1052,9 +1143,7 @@ class BinaryOperator(SymbolicExpression, ABC):
         cache.insert({k: v for k, v in values.items() if k in cache.keys}, output=self._is_false_)
 
     def _reset_cache_(self) -> None:
-        self._cache_.clear()
-        self._seen_parent_values_[True].clear()
-        self._seen_parent_values_[False].clear()
+        super()._reset_cache_()
         self.left._reset_cache_()
         self.right._reset_cache_()
 
@@ -1162,7 +1251,8 @@ class Comparator(BinaryOperator):
     def apply_operation(self, operand_values: Dict[int, HashedValue]):
         return self.operation(operand_values[self.left._id_].value, operand_values[self.right._id_].value)
 
-    def get_first_second_operands(self, sources: Dict[int, HashedValue]) -> Tuple[SymbolicExpression, SymbolicExpression]:
+    def get_first_second_operands(self, sources: Dict[int, HashedValue]) -> Tuple[
+        SymbolicExpression, SymbolicExpression]:
         if sources and self.right._parent_variable_._id_ in sources:
             return self.right, self.left
         else:

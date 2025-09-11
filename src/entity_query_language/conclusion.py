@@ -29,6 +29,8 @@ class Conclusion(SymbolicExpression[T], ABC):
 
         self.var, self.value = self._update_children_(self.var, self.value)
 
+        self.value._is_inferred_ = True
+
         self._node_.weight = RDREdge.Then
 
         current_parent = SymbolicExpression._current_parent_()

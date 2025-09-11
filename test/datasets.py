@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
-from typing_extensions import List, Optional
+from typing_extensions import List, Optional, ClassVar
 
 from entity_query_language import symbol
 
@@ -59,7 +60,7 @@ class RevoluteConnection(Connection):
 @symbol
 @dataclass
 class World:
-    id: int = 0
+    id: int = field(default=0)
     bodies: List[Body] = field(default_factory=list)
     connections: List[Connection] = field(default_factory=list)
     views: List[View] = field(default_factory=list, repr=False)

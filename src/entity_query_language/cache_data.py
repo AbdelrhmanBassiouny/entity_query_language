@@ -220,6 +220,7 @@ class IndexedCache:
         :rtype: None
         """
         assignment = dict(assignment)
+        self.seen_set.add(assignment)
         cache = self.cache
         for k_idx, k in enumerate(self.keys):
             if k not in assignment.keys():
@@ -240,8 +241,8 @@ class IndexedCache:
         """
         assignment = {k: v for k, v in assignment.items() if k in self.keys}
         seen = self.seen_set.check(assignment)
-        if not seen:
-            self.seen_set.add(assignment)
+        # if not seen:
+        #     self.seen_set.add(assignment)
         return seen
 
     def retrieve(self, assignment, cache=None, key_idx=0, result: Dict = None) -> Iterable:

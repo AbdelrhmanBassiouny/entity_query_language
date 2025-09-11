@@ -36,3 +36,31 @@ class InferMode(Enum):
     """
     Inference is never performed.
     """
+
+
+class EQLMode(Enum):
+    """
+    The modes of an entity query.
+    """
+    Rule = auto()
+    """
+    Means this is a Rule that infers new relations/instances.
+    """
+    Query = auto()
+    """
+    Means this is a Query that searches for matches
+    """
+
+
+class PredicateType(Enum):
+    """
+    The type of a predicate.
+    """
+    SubClassOfPredicate = auto()
+    """
+    The predicate is an instance of Predicate class.
+    """
+    DecoratedMethod = auto()
+    """
+    The predicate is a method decorated with @predicate decorator.
+    """

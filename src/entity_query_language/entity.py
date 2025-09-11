@@ -18,8 +18,9 @@ from .utils import is_iterable
 T = TypeVar('T')  # Define type variable "T"
 
 
-def an(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[SymbolicExpression, bool],
-       domain: Optional[Any]=None) -> Union[An[T], T, SymbolicExpression[T]]:
+def an(entity_: Optional[Union[SetOf[T], Entity[T], T, Iterable[T], Type[T]]] = None,
+       *properties: Union[SymbolicExpression, bool],
+       domain: Optional[Any]=None, has_type: Optional[Type[T]] = None) -> Union[An[T], T, SymbolicExpression[T]]:
     """
     Select a single element satisfying the given entity description.
 
@@ -29,10 +30,12 @@ def an(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[S
     :type properties: Union[SymbolicExpression, bool]
     :param domain: Optional domain to constrain the selected variable.
     :type domain: Optional[Any]
+    :param has_type: Optional type to constrain the selected variable.
+    :type has_type: Optional[Type[T]]
     :return: A quantifier representing "an" element.
     :rtype: An[T]
     """
-    return _an_or_the(An, entity_, *properties, domain=domain)
+    return _an_or_the(An, entity_, *properties, domain=domain, has_type=has_type)
 
 
 a = an
@@ -41,8 +44,8 @@ This is an alias to accommodate for words not starting with vowels.
 """
 
 
-def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[SymbolicExpression, bool],
-       domain: Optional[Any]=None) -> The[T]:
+def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *properties: Union[SymbolicExpression, bool],
+       domain: Optional[Any]=None, has_type: Optional[Type[T]] = None) -> The[T]:
     """
     Select the unique element satisfying the given entity description.
 
@@ -52,15 +55,22 @@ def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T]], *properties: Union[
     :type properties: Union[SymbolicExpression, bool]
     :param domain: Optional domain to constrain the selected variable.
     :type domain: Optional[Any]
+    :param has_type: Optional type to constrain the selected variable.
+    :type has_type: Optional[Type[T]]
     :return: A quantifier representing "an" element.
     :rtype: The[T]
     """
-    return _an_or_the(The, entity_, *properties, domain=domain)
+    return _an_or_the(The, entity_, *properties, domain=domain, has_type=has_type)
 
 
 def _an_or_the(quantifier: Union[Type[An], Type[The]],
-               entity_: Union[SetOf[T], Entity[T]], *properties: Union[SymbolicExpression, bool],
-               domain: Optional[Any]=None) -> Union[An[T], The[T]]:
+               entity_: Union[SetOf[T], Entity[T], Type[T], None], *properties: Union[SymbolicExpression, bool],
+               domain: Optional[Any]=None,
+               has_type: Optional[Type[T]] = None) -> Union[An[T], The[T]]:
+    if isinstance(entity_, type):
+        entity_ = entity_()
+    elif entity_ is None and has_type:
+        entity_ = has_type()
     if isinstance(entity_, (Entity, SetOf)):
         return quantifier(entity_)
     elif isinstance(entity_, HasDomain):

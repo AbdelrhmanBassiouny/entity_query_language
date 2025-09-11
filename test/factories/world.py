@@ -3,8 +3,13 @@ from ..conf.world.base_config import WorldConf, HandleConf, ContainerConf, Fixed
     PrismaticConnectionConf, RevoluteConnectionConf
 
 
+last_world_id = -1
+
+
 def create_world(world_conf: WorldConf) -> World:
-    world = World()
+    global last_world_id
+    world = World(last_world_id+1)
+    last_world_id = world.id
 
     for body in world_conf.bodies:
         if isinstance(body, HandleConf):

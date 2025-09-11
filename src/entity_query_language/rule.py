@@ -4,13 +4,23 @@ from contextlib import contextmanager
 from typing import Union, Optional
 
 from .entity import T
-from .enums import RDREdge
+from .enums import RDREdge, EQLMode
 from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator, _set_symbolic_mode
 from .conclusion_selector import ExceptIf, ElseIf
 
 
 @contextmanager
-def symbolic_mode(query: Optional[SymbolicExpression] = None):
+def rule_mode(query: Optional[SymbolicExpression] = None):
+    """
+    Wrapper around symbolic construction mode to easily enable rule mode
+    """
+    # delegate to symbolic_mode
+    with symbolic_mode(query, EQLMode.Rule) as ctx:
+        yield ctx
+
+
+@contextmanager
+def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQLMode.Query):
     """
     Context manager to temporarily enable symbolic construction mode.
 
@@ -22,12 +32,12 @@ def symbolic_mode(query: Optional[SymbolicExpression] = None):
     try:
         if query is not None:
             query.__enter__()
-        _set_symbolic_mode(True)
+        _set_symbolic_mode(mode)
         yield SymbolicExpression._current_parent_()
     finally:
         if query is not None:
             query.__exit__()
-        _set_symbolic_mode(False)
+        _set_symbolic_mode(None)
 
 
 def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:

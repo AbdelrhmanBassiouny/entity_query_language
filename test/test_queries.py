@@ -18,6 +18,13 @@ def test_empty_conditions(handles_and_containers_world):
     assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
 
 
+def test_empty_conditions_and_no_domain(handles_and_containers_world, doors_and_drawers_world):
+    world = handles_and_containers_world
+    world2 = doors_and_drawers_world
+    query = an(entity(body := let("body", type_=Body), body.world == world))
+    assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
+
+
 def test_empty_conditions_without_using_entity(handles_and_containers_world):
     world = handles_and_containers_world
     query = an(let("body", type_=Body, domain=world.bodies))
@@ -122,6 +129,16 @@ def test_nested_specified_property_predicate_form_without_entity(handles_and_con
         query = an(Connection(parent=an(Container(name="Container1"), domain=world.bodies),
                                      child=an(Handle(), domain=world.bodies)),
                           domain=world.connections)
+    results = list(query.evaluate())
+    assert len(results) == 1, "Should generate 1 connections."
+    assert results[0].parent.name == "Container1"
+    assert results[0].child.name == "Handle1"
+
+
+def test_nested_specified_property_predicate_form_without_entity_without_domain(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(Connection(parent=a(Container(name="Container1")), child=a(has_type=Handle)))
     results = list(query.evaluate())
     assert len(results) == 1, "Should generate 1 connections."
     assert results[0].parent.name == "Container1"

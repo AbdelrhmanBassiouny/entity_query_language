@@ -9,7 +9,7 @@ from functools import lru_cache, wraps
 from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterable, ClassVar, dataclass_transform, Type
 
 from .cache_data import IndexedCache
-from .enums import InferMode
+from .enums import InferMode, EQLMode, PredicateType
 from .failures import ValueNotFoundInCache, MoreThanOneCacheEntryMatched
 from .hashed_data import HashedValue
 from .hashed_data import T
@@ -35,7 +35,8 @@ def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]
             function_arg_names = [pname for pname, p in inspect.signature(function).parameters.items()
                                   if p.default == inspect.Parameter.empty]
             kwargs.update(dict(zip(function_arg_names, args)))
-            return Variable(function.__name__, function, _cls_kwargs_=kwargs)
+            return Variable(function.__name__, function, _kwargs_=kwargs,
+                            _predicate_type_=PredicateType.DecoratedMethod)
         return function(*args, **kwargs)
 
     return wrapper
@@ -59,9 +60,16 @@ def symbol(cls):
         if in_symbolic_mode():
             if len(args) > 0:
                 return Variable(args[0], symbolic_cls, _domain_=args[1])
-            return Variable(symbolic_cls.__name__, symbolic_cls, _cls_kwargs_=kwargs,
-                            _is_predicate_=issubclass(symbolic_cls, Predicate))
-        return orig_new(symbolic_cls)
+            predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
+            return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type)
+        else:
+            instance = orig_new(symbolic_cls)
+            instance.__init__(*args, **kwargs)
+            kwargs = {f.name: HashedValue(getattr(instance, f.name)) for f in fields(instance) if f.init}
+            if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys :
+                Variable._cache_[symbolic_cls].keys = list(kwargs.keys())
+            Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
+            return instance
 
     cls.__new__ = symbolic_new
     return cls
@@ -134,7 +142,6 @@ class Predicate(ABC):
         Retrieve the results of the predicate from the graph.
         """
         yield from self.cache.retrieve(self.predicate_kwargs)
-
 
     def infer(self) -> Any:
         """
