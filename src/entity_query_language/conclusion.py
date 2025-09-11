@@ -72,6 +72,6 @@ class Add(Conclusion[T]):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         v = next(iter(self.value._evaluate__(sources)))[self.value._id_]
-        self.var._domain_[v.id_] = v
+        self._get_var_(self.var)._domain_[v.id_] = v
         sources[self.var._id_] = v
         return sources

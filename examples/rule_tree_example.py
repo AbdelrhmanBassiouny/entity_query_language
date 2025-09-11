@@ -1,9 +1,12 @@
-from entity_query_language import entity, an, let, and_, symbolic_mode, symbol, refinement, alternative, Add
+from entity_query_language import entity, an, and_, symbolic_mode, symbol, refinement, alternative, Add, a
 from dataclasses import dataclass, field
 from typing_extensions import List
 
+from entity_query_language.rule import rule_mode
+
 
 # --- Domain model
+@symbol
 @dataclass
 class Body:
     name: str
@@ -15,12 +18,12 @@ class Connection:
     parent: Body
     child: Body
 
-
+@symbol
 @dataclass
 class Fixed(Connection):
     ...
 
-
+@symbol
 @dataclass
 class Revolute(Connection):
     ...
@@ -33,6 +36,7 @@ class World:
     connections: List[Connection] = field(default_factory=list)
 
 
+@symbol
 @dataclass
 class View:  # A common super-type for Drawer/Door/Wardrobe in this example
     ...
@@ -73,23 +77,16 @@ fixed_3 = Fixed(body3, handle3)
 revolute_1 = Revolute(container2, body3)
 world.connections = [fixed_1, fixed_2, fixed_3, revolute_1]
 
-# --- Placeholders
-world = let("world", type_=World, domain=world)
-body = let("body", type_=Body, domain=world.bodies)
-container = let("container", type_=Body, domain=world.bodies)
-handle = let("handle", type_=Body, domain=world.bodies)
-fixed_connection = let("fixed_connection", type_=Fixed, domain=world.connections)
-revolute_connection = let("revolute_connection", type_=Revolute, domain=world.connections)
 
-views = let("views", type_=View)
 # --- Describe base query
 # We use a single selected variable that we will Add to in the rule tree.
-query = an(entity(views,
-                  body == fixed_connection.parent,
-                  handle == fixed_connection.child))
+with symbolic_mode():
+    query = an(entity(views:=View(), Fixed(parent=(body:=Body()), child=(handle:=Body()))
+                      )
+               )
 
 # --- Build the rule tree
-with symbolic_mode(query):
+with rule_mode(query):
     # Base conclusion: if a fixed connection exists between body and handle,
     # we consider it a Drawer by default.
     Add(views, Drawer(handle=handle, container=body))
@@ -101,7 +98,7 @@ with symbolic_mode(query):
 
         # Alternative refinement when the first refinement didn't fire: if the body is also connected to a parent
         # container via a revolute connection (alternative pattern), add a Wardrobe instead.
-        with alternative(body == revolute_connection.child, container == revolute_connection.parent):
+        with alternative(Revolute(child=body, parent=(container:=Body()))):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
 # query._render_tree_()

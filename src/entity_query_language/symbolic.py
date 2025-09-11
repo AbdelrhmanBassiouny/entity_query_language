@@ -165,7 +165,7 @@ class SymbolicExpression(Generic[T], ABC):
         """
         if isinstance(operand, (ResultQuantifier, Entity)):
             return operand._parent_variable_
-        elif isinstance(operand, HasDomain):
+        elif isinstance(operand, (HasDomain, Source)):
             return operand
         elif isinstance(operand, SetOf):
             raise ValueError(f"The operand {operand} does not have a single variable/HasDomain.")
@@ -927,12 +927,8 @@ class Variable(HasDomain[T]):
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
         if self._child_vars_:
-            if self._inferred_:
-                allowed_key = lambda v: v
-            else:
-                allowed_key = lambda v: v._id_ in sources
             kwargs_generators = {k: v._evaluate__(sources)
-                                 for k, v in self._child_vars_.items() if allowed_key(v)}
+                                 for k, v in self._child_vars_.items()}
             kwargs_combinations = generate_combinations(kwargs_generators)
         else:
             kwargs_combinations = [{}]
@@ -959,7 +955,8 @@ class Variable(HasDomain[T]):
         return self._predicate_type_ in [PredicateType.SubClassOfPredicate, PredicateType.DecoratedMethod]
 
     def _search_and_yield_from_cache_(self, **kwargs):
-        unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] for k, v in kwargs.items()}
+        unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] if isinstance(v, dict) else v
+                                   for k, v in kwargs.items()}
         if self._type_ not in self._cache_.keys() or not self._cache_[self._type_].keys:
             self._cache_[self._type_].keys = list(unwrapped_hashed_kwargs.keys())
         cache_keys = [self._type_]
