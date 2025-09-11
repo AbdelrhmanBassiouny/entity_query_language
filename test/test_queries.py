@@ -138,7 +138,9 @@ def test_nested_specified_property_predicate_form_without_entity(handles_and_con
 def test_nested_specified_property_predicate_form_without_entity_without_domain(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
-        query = an(Connection(parent=a(Container(name="Container1")), child=a(has_type=Handle)))
+        query = an(Connection(parent=a(Container(name="Container1", world=world)),
+                              child=a(Handle(world=world)),
+                              world=world))
     results = list(query.evaluate())
     assert len(results) == 1, "Should generate 1 connections."
     assert results[0].parent.name == "Container1"

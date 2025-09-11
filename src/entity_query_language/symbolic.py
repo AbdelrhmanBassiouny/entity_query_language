@@ -673,9 +673,10 @@ class Entity(QueryObjectDescriptor[T]):
         """
         Update the domain of the variable with the provided entity domain.
         """
+        if self.selected_variable is not None:
+            self.selected_variables.append(self.selected_variable)
         if self.domain is not None:
             if self.selected_variable is not None:
-                self.selected_variables.append(self.selected_variable)
                 type_ = self.selected_variable._type_
                 child = self.domain
                 if not isinstance(child, (Source, HasDomain)):
@@ -926,16 +927,22 @@ class Variable(HasDomain[T]):
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
         if self._child_vars_:
-            kwargs_generators = {k: v._evaluate__(sources) if isinstance(v, SymbolicExpression) else [HashedValue(v)]
-                                 for k, v in self._child_vars_.items() if v._id_ in sources}
+            if self._inferred_:
+                allowed_key = lambda v: v
+            else:
+                allowed_key = lambda v: v._id_ in sources
+            kwargs_generators = {k: v._evaluate__(sources)
+                                 for k, v in self._child_vars_.items() if allowed_key(v)}
             kwargs_combinations = generate_combinations(kwargs_generators)
         else:
             kwargs_combinations = [{}]
         for kwargs in kwargs_combinations:
             retrieved = False
-            for v in self._search_and_yield_from_cache_(**kwargs):
-                retrieved = True
-                yield v
+            if not self._is_inferred_:
+                for v in self._search_and_yield_from_cache_(**kwargs):
+                    retrieved = True
+                    v.update(sources)
+                    yield v
             if not retrieved and (self._is_inferred_ or self._is_predicate_):
                 unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] for k, v in kwargs.items()}
                 unbound_kwargs = {k: v._evaluate__(sources)
@@ -963,17 +970,7 @@ class Variable(HasDomain[T]):
                 if isinstance(t, type) and issubclass(t, self._type_):
                     cache_keys.append(t)
         for t in cache_keys:
-            # if unwrapped_hashed_kwargs:
-            #     # Only check the cache if there are kwargs because otherwise this means we need all values.
-            #     seen = self._cache_[t].check(unwrapped_hashed_kwargs)
-            # else:
-            #     # kwargs are empty so no constraints on the values, so we need all seen values if they exist.
-            #     seen = len(self._cache_[t].cache)
-            # if seen:
             for found_kwargs, value in self._cache_[t].retrieve(unwrapped_hashed_kwargs):
-                found_kwargs = {k: {self._get_var_id_(self._child_vars_[k]): v} for k, v in found_kwargs.items()
-                                if k in self._child_vars_}
-                kwargs.update(found_kwargs)
                 yield from self._process_output_and_update_values_(value.value, **kwargs)
 
     def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:

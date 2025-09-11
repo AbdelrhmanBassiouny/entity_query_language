@@ -65,12 +65,13 @@ def test_generate_drawers_predicate_form_without_entity(handles_and_containers_w
 
 
 def test_generate_drawers_predicate_form_without_entity_and_domain(handles_and_containers_world):
-    world = let("world", type_=World, domain=handles_and_containers_world)
+    # world = let("world", type_=World, domain=handles_and_containers_world)
+    world = handles_and_containers_world
     with rule_mode():
-        query = an(entity(Drawer(handle=an(handle := Handle()),
-                                 container=an(container := Container())),
-                          an(FixedConnection(parent=container, child=handle)),
-                          an(PrismaticConnection(child=container))))
+        query = an(entity(Drawer(handle=an(handle := Handle(world=world),),
+                                 container=an(container := Container(world=world))),
+                          an(FixedConnection(parent=container, child=handle, world=world)),
+                          an(PrismaticConnection(child=container, world=world))))
 
     # query._render_tree_()
     all_solutions = list(query.evaluate())
