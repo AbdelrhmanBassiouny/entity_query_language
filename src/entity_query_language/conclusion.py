@@ -9,7 +9,7 @@ from typing_extensions import Any, Optional, List
 
 from .enums import RDREdge
 from .hashed_data import HashedValue
-from .symbolic import SymbolicExpression, T, HasDomain, Variable
+from .symbolic import SymbolicExpression, T, Variable
 
 
 @dataclass(eq=False)
@@ -20,7 +20,7 @@ class Conclusion(SymbolicExpression[T], ABC):
     :ivar var: The variable being affected by the conclusion.
     :ivar value: The value or expression used by the conclusion.
     """
-    var: HasDomain
+    var: Variable[T]
     value: Any
     _child_: Optional[SymbolicExpression[T]] = field(init=False, default=None)
 
@@ -58,11 +58,10 @@ class Set(Conclusion[T]):
     """Set the value of a variable in the current solution binding."""
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
-        if self._parent_._id_ not in sources:
-            parent_value = next(iter(self._parent_._evaluate__(sources)))[self._parent_._id_]
-        else:
-            parent_value = sources[self._parent_._id_]
-        parent_value.value = self.value
+        if self.var._var_._id_ not in sources:
+            parent_value = next(iter(self.var._evaluate__(sources)))[self.var._var_._id_]
+            sources[self.var._var_._id_] = parent_value
+        sources[self.var._var_._id_] = next(iter(self.value._evaluate__(sources)))[self.value._id_]
         return sources
 
 
@@ -72,6 +71,5 @@ class Add(Conclusion[T]):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         v = next(iter(self.value._evaluate__(sources)))[self.value._id_]
-        self._get_var_(self.var)._domain_[v.id_] = v
-        sources[self.var._id_] = v
+        sources[self.var._var_._id_] = v
         return sources

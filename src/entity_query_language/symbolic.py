@@ -225,16 +225,6 @@ class SymbolicExpression(Generic[T], ABC):
         return self._node_.root._expression_
 
     @property
-    @lru_cache(maxsize=None)
-    def _sources_(self) -> List[Source]:
-        sources = HashedIterable()
-        for variable in self._unique_variables_:
-            for source in variable.value._domain_sources_:
-                for leaf in source._node_.leaves:
-                    sources.add(leaf._expression_)
-        return [v.value for v in sources]
-
-    @property
     @abstractmethod
     def _name_(self) -> str:
         pass
@@ -404,6 +394,10 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
     variable.
     """
 
+    @property
+    def _var_id_(self) -> Optional[int]:
+        return self._var_._id_ if self._var_ else None
+
     def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
         if not self._var_:
             return super().__getattr__(name)
@@ -465,9 +459,6 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
     def __post_init__(self):
         super().__post_init__()
         self._var_ = self._child_._var_
-        self._original_id_ = self._id_
-        if isinstance(self._child_, Entity):
-            self._id_ = self._child_.selected_variable._id_
 
     @property
     def _name_(self) -> str:
@@ -519,8 +510,8 @@ class UnificationDict(UserDict):
     A dictionary which maps all expressions that are on a single variable to the original variable id.
     """
 
-    def __getitem__(self, key: SymbolicExpression[T]) -> T:
-        key = key._id_expression_map_[key._id_]
+    def __getitem__(self, key: CanBehaveLikeAVariable[T]) -> T:
+        key = key._id_expression_map_[key._var_id_]
         return super().__getitem__(key).value
 
 
@@ -783,41 +774,9 @@ class Entity(QueryObjectDescriptor[T]):
         return vars
 
 
-@dataclass(eq=False)
-class HasDomain(CanBehaveLikeAVariable[T], ABC):
-    _domain_: HashedIterable[Any] = field(default=None, init=False)
-    _domain_sources_: Optional[List[Union[HasDomain, Source]]] = field(default_factory=list, init=False)
-    _child_: Optional[HasDomain] = field(init=False)
-
-    def __post_init__(self):
-        self._update_domain_(self._domain_)
-        super().__post_init__()
-
-    def _update_domain_(self, domain):
-        if domain is not None:
-            if isinstance(domain, SymbolicExpression):
-                self._domain_sources_.append(domain)
-            if isinstance(domain, Source):
-                domain = domain._evaluate__().value
-            elif isinstance(domain, SymbolicExpression):
-                domain = (next(iter(v.values())) for v in domain._evaluate__())
-            elif not is_iterable(domain):
-                domain = [HashedValue(domain)]
-            if isinstance(self._domain_, HashedIterable):
-                self._domain_.set_iterable(domain)
-            else:
-                self._domain_ = HashedIterable(domain)
-
-    def __iter__(self):
-        for v in self._domain_:
-            yield {self._id_: HashedValue(v)}
-
-    def __hash__(self):
-        return hash(id(self))
-
 
 @dataclass(eq=False)
-class Variable(HasDomain[T]):
+class Variable(CanBehaveLikeAVariable[T]):
     _name__: str
     """
     The name of the variable.
@@ -830,8 +789,14 @@ class Variable(HasDomain[T]):
     """
     The properties of the variable as keyword arguments.
     """
-    _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
-    _invert_: bool = field(default=False)
+    _domain_: Union[SymbolicExpression, Iterable] = field(default_factory=HashedIterable, kw_only=True)
+    """
+    Redefined from super class to make it keyword only instead of not in the init.
+    """
+    _invert_: bool = field(init=False, default=False)
+    """
+    Redefined from super class to give it a default value.
+    """
     _predicate_type_: Optional[PredicateType] = field(default=None)
     """
     If this symbol is an instance of the Predicate class.
@@ -844,34 +809,45 @@ class Variable(HasDomain[T]):
     """
     A mapping from variable type to an indexed cache of all seen inputs and outputs of the variable type. 
     """
-    _child_vars_: Optional[Dict[str, Variable]] = field(default=None, init=False)
+    _child_vars_: Optional[Dict[str, SymbolicExpression]] = field(default=None, init=False)
     """
     A dictionary mapping child variable names to variables, these are from the _kwargs_ dictionary. 
     """
 
     def __post_init__(self):
         self._validate_inputs_and_fill_missing_ones_()
+        self._var_ = self
+        self._update_domain_(self._domain_)
         super().__post_init__()
-        self._update_domain_sources_from_kwargs_()
+        self._update_child_vars_from_kwargs_()
+
+    def _update_domain_(self, domain):
+        if domain:
+            if isinstance(domain, Source):
+                domain = domain._evaluate__().value
+            elif isinstance(domain, SymbolicExpression):
+                domain = (next(iter(v.values())) for v in domain._evaluate__())
+            elif not is_iterable(domain):
+                domain = [HashedValue(domain)]
+            if isinstance(self._domain_, HashedIterable):
+                self._domain_.set_iterable(domain)
+            else:
+                self._domain_ = HashedIterable(domain)
 
     def _validate_inputs_and_fill_missing_ones_(self):
         if self._kwargs_ and not self._type_:
             raise ValueError(f"Variable {self._name_} has class keyword arguments but no type is specified.")
-        if type(self) is Variable:
-            self._child_ = None
+        self._child_ = None
 
-    def _update_domain_sources_from_kwargs_(self):
+    def _update_child_vars_from_kwargs_(self):
         if self._kwargs_:
-            domain_sources = []
             self._child_vars_ = {}
             for k, v in self._kwargs_.items():
                 if isinstance(v, SymbolicExpression):
-                    domain_sources.append(v)
+                    self._child_vars_[k] = v
                 else:
-                    domain_sources.append(Variable._from_domain_(v, name=self._name_ + '.' + k))
-                self._child_vars_[k] = domain_sources[-1]
-            self._domain_sources_.extend(domain_sources)
-            self._update_children_(*domain_sources)
+                    self._child_vars_[k] = Variable._from_domain_(v, name=self._name_ + '.' + k)
+            self._update_children_(*self._child_vars_.values())
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
@@ -983,6 +959,10 @@ class Variable(HasDomain[T]):
                 if isinstance(v, HasDomain):
                     variables.extend(v._all_variable_instances_)
         return variables
+
+    def __iter__(self):
+        for v in self._domain_:
+            yield {self._id_: HashedValue(v)}
 
     def __repr__(self):
         return self._name_
@@ -1210,10 +1190,10 @@ class Comparator(BinaryOperator):
             return self.left, self.right
 
     def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
-        left_leaf_value = self.left._parent_variable_._domain_[operand_value_map[self.left].id_]
-        right_leaf_value = self.right._parent_variable_._domain_[operand_value_map[self.right].id_]
-        return HashedIterable(values={self.left._parent_variable_._id_: left_leaf_value,
-                                      self.right._parent_variable_._id_: right_leaf_value})
+        left_leaf_value = self.left._var_._domain_[operand_value_map[self.left].id_]
+        right_leaf_value = self.right._var_._domain_[operand_value_map[self.right].id_]
+        return HashedIterable(values={self.left._var_._id_: left_leaf_value,
+                                      self.right._var_._id_: right_leaf_value})
 
 
 @dataclass(eq=False)

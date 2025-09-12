@@ -11,7 +11,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, HasDomain, Source, OR, in_symbolic_mode, Not
+    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable
 from .predicate import Predicate, HasType
 from .utils import is_iterable
 
@@ -73,7 +73,7 @@ def _an_or_the(quantifier: Union[Type[An], Type[The]],
         entity_ = has_type()
     if isinstance(entity_, (Entity, SetOf)):
         return quantifier(entity_)
-    elif isinstance(entity_, HasDomain):
+    elif isinstance(entity_, CanBehaveLikeAVariable):
         return quantifier(entity(entity_, *properties, domain=domain))
     elif isinstance(entity_, (list, tuple)):
         return quantifier(set_of(entity_, *properties))
