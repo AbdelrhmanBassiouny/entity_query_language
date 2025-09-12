@@ -1,6 +1,7 @@
+from examples.intro_example import prismatic_connection
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
-from entity_query_language import let, an, entity, and_
+from entity_query_language import let, an, entity, and_, symbolic_mode
 from entity_query_language.rule import refinement, alternative, rule_mode
 from entity_query_language.conclusion import Add
 from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
@@ -211,28 +212,30 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
 
 
 def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
-    world = let("world", type_=World, domain=doors_and_drawers_world)
-    body = let("body", type_=Body, domain=world.bodies)
-    container = let("container", type_=Container, domain=world.bodies)
-    handle = let("handle", type_=Handle, domain=world.bodies)
-    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
-    revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
+    # world = let("world", type_=World, domain=doors_and_drawers_world)
+    # body = let("body", type_=Body, domain=world.bodies)
+    # container = let("container", type_=Container, domain=world.bodies)
+    # handle = let("handle", type_=Handle, domain=world.bodies)
+    # fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
+    # prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    # revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
+    world = doors_and_drawers_world
+    with rule_mode():
+        body = Body(world=world)
+        handle = Handle(world=world)
+        fixed_connection = FixedConnection(parent=body, child=handle, world=world)
+        prismatic_connection = PrismaticConnection(child=body, world=world)
+        query = an(entity(views := View(), fixed_connection, prismatic_connection))
 
-    query = an(entity(views := let("views", type_=View),
-                      body == fixed_connection.parent,
-                      handle == fixed_connection.child,
-                      body == prismatic_connection.child
-                      ))
-
-    with rule_mode(query):
-        Add(views, Drawer(handle=handle, container=body))
-        with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
-            Add(views, Door(handle=handle, body=body))
-        with alternative(handle == fixed_connection.child, body == fixed_connection.parent,
-                         body == revolute_connection.child,
-                         container == revolute_connection.parent):
-            Add(views, Wardrobe(handle=handle, body=body, container=container))
+        with query:
+            Add(views, Drawer(handle=handle, container=body))
+            with alternative(revolute_connection:=RevoluteConnection(parent=body, child=handle, world=world)):
+                Add(views, Door(handle=handle, body=body))
+            container = Container(world=world)
+            with alternative(fixed_connection,
+                             body == revolute_connection.child,
+                             container == revolute_connection.parent):
+                Add(views, Wardrobe(handle=handle, body=body, container=container))
 
     # query._render_tree_()
     all_solutions = list(query.evaluate())

@@ -73,7 +73,7 @@ class World:
             return False
         return self.id == other.id
 
-
+@symbol
 @dataclass(unsafe_hash=True)
 class View(WorldEntity):
     ...

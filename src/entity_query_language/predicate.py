@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
-from collections import defaultdict
-from dataclasses import dataclass, field, fields
-from functools import lru_cache, wraps
+from dataclasses import dataclass, fields
+from functools import wraps
 
-from typing_extensions import Callable, Any, Tuple, Dict, Optional, List, Iterable, ClassVar, dataclass_transform, Type
+from typing_extensions import Callable, Any, Tuple, Optional, dataclass_transform, Type
 
-from .cache_data import IndexedCache
-from .enums import InferMode, EQLMode, PredicateType
-from .failures import ValueNotFoundInCache, MoreThanOneCacheEntryMatched
-from .hashed_data import HashedValue
+from .enums import EQLMode, PredicateType
+from .hashed_data import HashedValue, HashedIterable
 from .hashed_data import T
-from .symbolic import SymbolicExpression, HasDomain, Variable, in_symbolic_mode
-from .utils import generate_combinations
+from .symbolic import SymbolicExpression, Variable, in_symbolic_mode, Entity, An, chained_logic, AND
 
 
 def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]]:
@@ -58,15 +54,33 @@ def symbol(cls):
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
-            if len(args) > 0:
-                return Variable(args[0], symbolic_cls, _domain_=args[1])
+            domain = kwargs.pop('domain', HashedIterable())
             predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
-            return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type)
+            # This mode is when we try to infer new instances of variables, this includes also evaluating predicates
+            # because they also need to be inferred. So basically this mode is when there is no domain availabe and
+            # we need to infer new values.
+            if not domain and (in_symbolic_mode(EQLMode.Rule) or predicate_type):
+                return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _domain_=domain,
+                                _predicate_type_=predicate_type)
+            else:
+                # In this mode, we either have a domain through the `domain` provided here, or through the cache if
+                # the domain is not provided. Then we filter this domain by the provided constraints on the variable
+                # attributes given as keyword arguments.
+                var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_=domain, _predicate_type_=predicate_type)
+                if kwargs:
+                    conditions = [getattr(var, k) == v for k, v in kwargs.items()]
+                    if len(conditions) == 1:
+                        expression = conditions[0]
+                    else:
+                        expression = chained_logic(AND, *conditions)
+                    return An(Entity([var], expression))
+                else:
+                    return var
         else:
             instance = orig_new(symbolic_cls)
             instance.__init__(*args, **kwargs)
             kwargs = {f.name: HashedValue(getattr(instance, f.name)) for f in fields(instance) if f.init}
-            if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys :
+            if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
                 Variable._cache_[symbolic_cls].keys = list(kwargs.keys())
             Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
             return instance
@@ -74,138 +88,27 @@ def symbol(cls):
     cls.__new__ = symbolic_new
     return cls
 
-PredicateCache = Dict[Type, IndexedCache]
 
 @symbol
 @dataclass(eq=False)
 class Predicate(ABC):
     """
-    The super predicate class that represents a relation. This class manages an in memory graph of relations that is
-    used to cache results of functions/predicates and allow retrieval from the graph instead of re-evaluation of the
-    predicate each time. This also means that cache invalidation mechanisms are needed to remove relations that no
-    longer hold which would have caused incorrect query results.
-
-    This class changes the behavior of functions in symbolic mode to return a SymbolicPredicate instead of evaluating
-    the function.
+    The super predicate class that represents a filtration operation.
     """
-    infer_mode: InferMode = field(default=InferMode.Auto, init=False)
-    """
-    The inference mode to use, can be Always, Never, and Auto (requires implementation of _should_infer method that
-    decides when to infer and when to retrieve the results).
-    """
-    inferred_once: ClassVar[bool] = False
-    """
-    If inference has been performed at least once.
-    """
-    all_predicates_cache: ClassVar[PredicateCache] = defaultdict(IndexedCache)
-    """
-    A mapping from predicate name to a dict mapping edge individual id to its arguments.
-    """
-
-    def __post_init__(self):
-        if type(self) not in self.all_predicates_cache:
-            self.cache.keys = list(self.predicate_kwargs.keys())
-
-    def __call__(self) -> Any:
-        """
-        This method wraps the behavior of the predicate by deciding whether to retrieve or to infer and also adds
-        new relations to the graph through the infer() method.
-        """
-        if self.should_infer:
-            result = self.infer()
-            self.__class__.inferred_once = True
-        else:
-            result = self.retrieve_one()[1]
-        return result
-
-    def retrieve_one(self) -> Tuple[Dict, Any]:
-        """
-        Retrieve the result of the predicate from the graph, should only return one result.
-
-        :return: The results of the predicate.
-        :raises ValueError: If no results are found.
-        :raises MoreThanOneCacheEntryMatched: If more than one result is found.
-        """
-        val_gen = self.retrieve()
-        result = None
-        try:
-            result = next(val_gen)
-            result2 = next(val_gen)
-            raise MoreThanOneCacheEntryMatched(self, self.predicate_kwargs, [result, result2])
-        except StopIteration:
-            if result is not None:
-                return result
-            raise ValueNotFoundInCache(self, self.predicate_kwargs)
-
-    def retrieve(self) -> Iterable[Tuple[Dict, Any]]:
-        """
-        Retrieve the results of the predicate from the graph.
-        """
-        yield from self.cache.retrieve(self.predicate_kwargs)
-
-    def infer(self) -> Any:
-        """
-        Evaluate the predicate and infer new relations and add them to the graph.
-        """
-        result = self._infer()
-        self.cache.insert(self.predicate_kwargs, result)
-        return result
-
-    @property
-    def should_infer(self) -> bool:
-        """
-        Determine if the predicate relations should be inferred or just retrieve current relations.
-        """
-        match self.infer_mode:
-            case InferMode.Always:
-                return True
-            case InferMode.Never:
-                return False
-            case InferMode.Auto:
-                return self._should_infer()
-            case _:
-                raise ValueError(f"Invalid infer mode: {self.infer_mode}")
-
-    @classmethod
-    def clear_cache(cls):
-        """
-        Clear the cache of the predicate.
-        """
-        cls.all_predicates_cache[cls].clear()
-
-    @classmethod
-    def clear_all_predicate_caches(cls):
-        """
-        Clear the caches of all predicates.
-        """
-        for cache in cls.all_predicates_cache.values():
-            cache.clear()
-
-    @property
-    def predicate_kwargs(self) -> Dict[str, Any]:
-        """
-        The keyword arguments to pass to the predicate.
-        """
-        return {f.name: getattr(self, f.name) for f in fields(self) if f.init}
-
-    def _should_infer(self) -> bool:
-        """
-        Predicate specific reasoning on when to infer relations.
-        """
-        return not self.cache.check(self.predicate_kwargs)
-
-    @property
-    def cache(self) -> IndexedCache:
-        return self.all_predicates_cache[type(self)]
-
-    @classmethod
-    def edge_name(cls):
-        return cls.__name__
 
     @abstractmethod
-    def _infer(self) -> Any:
+    def __call__(self) -> Any:
         """
-        Evaluate the predicate with the given arguments and return the results.
+        Evaluate the predicate with the current arguments and return the results.
         This method should be implemented by subclasses.
         """
         ...
+
+
+@dataclass(eq=False)
+class HasType(Predicate):
+    variable: Any
+    types_: Tuple[Type, ...]
+
+    def __call__(self) -> bool:
+        return isinstance(self.variable, self.types_)

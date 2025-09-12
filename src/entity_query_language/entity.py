@@ -11,8 +11,8 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, HasDomain, Source, HasType, OR, in_symbolic_mode, Not
-from .predicate import Predicate
+    chained_logic, HasDomain, Source, OR, in_symbolic_mode, Not
+from .predicate import Predicate, HasType
 from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
@@ -96,7 +96,7 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Pr
     :rtype: Entity[T]
     """
     selected_variables, expression = _extract_variables_and_expression([selected_variable], *properties)
-    return Entity(_child_=expression, selected_variable=selected_variables[0], domain=domain)
+    return Entity(selected_variables, expression, domain=domain)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
@@ -111,7 +111,7 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :rtype: SetOf[T]
     """
     selected_variables, expression = _extract_variables_and_expression(selected_variables, *properties)
-    return SetOf(_child_=expression, selected_variables=selected_variables)
+    return SetOf(selected_variables, expression)
 
 
 def _extract_variables_and_expression(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) \

@@ -390,7 +390,71 @@ class SourceCall(Source):
 
 
 @dataclass(eq=False)
-class ResultQuantifier(SymbolicExpression[T], ABC):
+class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
+    """
+    This class adds the monitoring/tracking behaviour on variables that tracks attribute access, calling,
+    and comparison operations.
+    """
+    _var_: CanBehaveLikeAVariable[T] = field(init=False, default=None)
+    """
+    A variable that is used if the child class to this class want to provide a variable to be tracked other than 
+    itself, this is specially useful for child classes that holds a variable instead of being a variable and want
+     to delegate the variable behaviour to the variable it has instead.
+    For example, this is the case for the ResultQuantifiers & QueryDescriptors that operate on a single selected
+    variable.
+    """
+
+    def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
+        if not self._var_:
+            return super().__getattr__(name)
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(f"{self._var_._name_} has no attribute {name}")
+        return Attribute(self._var_, name)
+
+    def __call__(self, *args, **kwargs) -> CanBehaveLikeAVariable[T]:
+        if not self._var_:
+            return super().__call__(*args, **kwargs)
+        else:
+            return Call(self._var_, args, kwargs)
+
+    def __eq__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__eq__(other)
+        return Comparator(self._var_, other, operator.eq)
+
+    def __contains__(self, item) -> Comparator:
+        if not self._var_:
+            return super().__contains__(item)
+        return Comparator(item, self._var_, operator.contains)
+
+    def __ne__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__ne__(other)
+        return Comparator(self._var_, other, operator.ne)
+
+    def __lt__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__lt__(other)
+        return Comparator(self._var_, other, operator.lt)
+
+    def __le__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__le__(other)
+        return Comparator(self._var_, other, operator.le)
+
+    def __gt__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__gt__(other)
+        return Comparator(self._var_, other, operator.gt)
+
+    def __ge__(self, other) -> Comparator:
+        if not self._var_:
+            return super().__ge__(other)
+        return Comparator(self._var_, other, operator.ge)
+
+
+@dataclass(eq=False)
+class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
     """
     Base for quantifiers that return concrete results from entity/set queries
     (e.g., An, The).
@@ -400,6 +464,7 @@ class ResultQuantifier(SymbolicExpression[T], ABC):
 
     def __post_init__(self):
         super().__post_init__()
+        self._var_ = self._child_._var_
         self._original_id_ = self._id_
         if isinstance(self._child_, Entity):
             self._id_ = self._child_.selected_variable._id_
@@ -521,15 +586,15 @@ class An(ResultQuantifier[T]):
 
 
 @dataclass(eq=False)
-class QueryObjectDescriptor(SymbolicExpression[T], ABC):
+class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     """
     Describes the queried object(s), could be a query over a single variable or a set of variables,
     also describes the condition(s)/properties of the queried object(s).
     """
+    selected_variables: List[SymbolicExpression[T]] = field(default_factory=list)
     _child_: Optional[SymbolicExpression[T]] = field(default=None)
     warned_vars: typing.Set = field(default_factory=set, init=False)
-    rule_mode: bool = field(default=False)
-    selected_variables: List[SymbolicExpression[T]] = field(default_factory=list)
+    rule_mode: bool = field(default=False, init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -617,7 +682,6 @@ class SetOf(QueryObjectDescriptor[T]):
     """
     A query over a set of variables.
     """
-    selected_variables: Iterable[HasDomain] = field(default_factory=tuple)
 
     @property
     def _name_(self) -> str:
@@ -661,28 +725,15 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable: Optional[Variable[T]] = field(default=None)
+    selected_variable: Optional[Variable[T]] = field(default=None, init=False)
     domain: Optional[Any] = field(default=None)
 
     def __post_init__(self):
-        self.parse_selected_variable_and_update_its_domain()
-        super().__post_init__()
-        self.update_child_expression_with_variable_properties()
-
-    def parse_selected_variable_and_update_its_domain(self):
-        """
-        Update the domain of the variable with the provided entity domain.
-        """
         if self.selected_variable is not None:
             self.selected_variables.append(self.selected_variable)
-        if self.domain is not None:
-            if self.selected_variable is not None:
-                type_ = self.selected_variable._type_
-                child = self.domain
-                if not isinstance(child, (Source, HasDomain)):
-                    child = Source(type_.__name__, self.domain)
-                var_domain = HasType(_child_=child, _type_=(type_,))
-                self.selected_variable._update_domain_(var_domain)
+        super().__post_init__()
+        self.update_child_expression_with_variable_properties()
+        self._var_ = self.selected_variable
 
     def update_child_expression_with_variable_properties(self):
         """
@@ -733,7 +784,7 @@ class Entity(QueryObjectDescriptor[T]):
 
 
 @dataclass(eq=False)
-class HasDomain(SymbolicExpression[T], ABC):
+class HasDomain(CanBehaveLikeAVariable[T], ABC):
     _domain_: HashedIterable[Any] = field(default=None, init=False)
     _domain_sources_: Optional[List[Union[HasDomain, Source]]] = field(default_factory=list, init=False)
     _child_: Optional[HasDomain] = field(init=False)
@@ -761,91 +812,8 @@ class HasDomain(SymbolicExpression[T], ABC):
         for v in self._domain_:
             yield {self._id_: HashedValue(v)}
 
-    def __getattr__(self, name):
-        if name.startswith('__') and name.endswith('__'):
-            raise AttributeError(f"{self._name_} has no attribute {name}")
-        return Attribute(self, name)
-
-    def __call__(self, *args, **kwargs):
-        return Call(self, args, kwargs)
-
-    def __eq__(self, other):
-        return Comparator(self, other, operator.eq)
-
-    def __contains__(self, item):
-        return Comparator(item, self, operator.contains)
-
-    def __ne__(self, other):
-        return Comparator(self, other, operator.ne)
-
-    def __lt__(self, other):
-        return Comparator(self, other, operator.lt)
-
-    def __le__(self, other):
-        return Comparator(self, other, operator.le)
-
-    def __gt__(self, other):
-        return Comparator(self, other, operator.gt)
-
-    def __ge__(self, other):
-        return Comparator(self, other, operator.ge)
-
     def __hash__(self):
         return hash(id(self))
-
-
-@dataclass(eq=False)
-class DomainFilter(HasDomain, ABC):
-    _child_: Union[HasDomain, Source]
-    _invert_: bool = field(init=False, default=False)
-
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
-            -> Iterable[Dict[int, HashedValue]]:
-        child_val = self._child_._evaluate__(sources)
-        if self._parent_variable_:
-            yield from map(lambda v: {self._parent_variable_._id_: v, self._id_: v},
-                           filter(self._filter_func_, child_val))
-        else:
-            yield from map(lambda v: {self._id_: v},
-                           filter(self._filter_func_, child_val))
-
-    def __iter__(self):
-        yield from map(lambda v: HashedIterable(values={self._id_: v}),
-                       filter(self._filter_func_, self._child_._evaluate__()))
-
-    def _filter_func_(self, v: Any) -> bool:
-        """
-        The filter function to be used to filter the domain, and handle inversion.
-        """
-        if self._invert_:
-            return not self._filter_func__(v)
-        return self._filter_func__(v)
-
-    @abstractmethod
-    def _filter_func__(self, v: Any) -> bool:
-        """
-        The filter function to be used to filter the domain.
-        """
-        ...
-
-
-@dataclass(eq=False)
-class HasType(DomainFilter):
-    _type_: Tuple[Type, ...]
-
-    @property
-    def _name_(self):
-        return f"HasType({','.join(t.__name__ for t in self._type_)})"
-
-    def _filter_func__(self, v: Any) -> bool:
-        if isinstance(v, HashedValue):
-            v = v.value
-        return isinstance(v, self._type_)
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        return self._child_._all_variable_instances_
 
 
 @dataclass(eq=False)
@@ -864,10 +832,6 @@ class Variable(HasDomain[T]):
     """
     _domain_: Union[HashedIterable, HasDomain, Source, Iterable] = field(default_factory=HashedIterable, kw_only=True)
     _invert_: bool = field(default=False)
-    _properties_: Optional[Iterable[Union[SymbolicExpression, bool]]] = field(default=None)
-    """
-    The properties of the variable as an iterable of constraints (i.e. comparators)
-    """
     _predicate_type_: Optional[PredicateType] = field(default=None)
     """
     If this symbol is an instance of the Predicate class.
@@ -908,7 +872,6 @@ class Variable(HasDomain[T]):
                 self._child_vars_[k] = domain_sources[-1]
             self._domain_sources_.extend(domain_sources)
             self._update_children_(*domain_sources)
-            self._properties_ = (getattr(self, k) == v for k, v in self._kwargs_.items())
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
@@ -1026,11 +989,11 @@ class Variable(HasDomain[T]):
 
 
 @dataclass(eq=False)
-class DomainMapping(HasDomain, ABC):
+class DomainMapping(CanBehaveLikeAVariable[T], ABC):
     """
     A symbolic expression the maps the domain of symbolic variables.
     """
-    _child_: HasDomain
+    _child_: CanBehaveLikeAVariable[T]
     _invert_: bool = field(init=False, default=False)
 
     @property
@@ -1041,12 +1004,6 @@ class DomainMapping(HasDomain, ABC):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
-        yield from self._update_domain_(sources)
-
-    def __iter__(self):
-        yield from self._update_domain_()
-
-    def _update_domain_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         child_val = self._child_._evaluate__(sources)
         for child_v in child_val:
             v = self._apply_mapping_(child_v[self._child_._id_])
@@ -1167,8 +1124,8 @@ class Comparator(BinaryOperator):
     """
     A symbolic equality check that can be used to compare symbolic variables.
     """
-    left: HasDomain
-    right: HasDomain
+    left: CanBehaveLikeAVariable
+    right: CanBehaveLikeAVariable
     operation: Callable[[Any, Any], bool]
     _invert__: bool = field(init=False, default=False)
 

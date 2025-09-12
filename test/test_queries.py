@@ -522,7 +522,7 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
     class IsHandle(Predicate):
         body: Body
 
-        def _infer(self):
+        def __call__(self):
             return self.body.name.startswith("Handle")
 
     with symbolic_mode():

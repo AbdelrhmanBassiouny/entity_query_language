@@ -3,6 +3,9 @@ from entity_query_language import entity, an, let, and_, contains, the, Multiple
 from dataclasses import dataclass, field
 from typing_extensions import List
 
+from entity_query_language.rule import rule_mode
+from entity_query_language.symbolic import Variable
+
 
 @dataclass(eq=False)
 class Body:
@@ -107,8 +110,6 @@ class Drawer:
     handle: Body
     body: Body
 
-
-
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
 c1_c2 = Prismatic(world.bodies[0], world.bodies[1])
 c2_h2 = Fixed(world.bodies[1], world.bodies[3])
@@ -134,9 +135,10 @@ assert results[0][handle].name == "Handle2"
 
 
 # Write the query body
-with symbolic_mode():
+with rule_mode():
     result = an(entity(Drawer(handle=handle, body=drawer_body),
-                       and_(parent_container == prismatic_connection.parent, drawer_body == prismatic_connection.child,
+                       and_(parent_container == prismatic_connection.parent,
+                            drawer_body == prismatic_connection.child,
                             drawer_body == fixed_connection.parent, handle == fixed_connection.child)
                        )
                 ).evaluate()
