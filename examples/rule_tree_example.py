@@ -2,7 +2,7 @@ from entity_query_language import entity, an, and_, symbolic_mode, symbol, refin
 from dataclasses import dataclass, field
 from typing_extensions import List
 
-from entity_query_language.rule import rule_mode
+from entity_query_language.symbolic import rule_mode
 
 
 # --- Domain model

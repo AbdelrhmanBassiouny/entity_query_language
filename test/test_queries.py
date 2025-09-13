@@ -5,15 +5,16 @@ import pytest
 from entity_query_language import and_, not_, contains, in_, symbolic_mode
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
 from entity_query_language import an, entity, set_of, let, the, or_, predicate, a
-from entity_query_language.failures import MultipleSolutionFound, ValueNotFoundInCache
+from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.predicate import Predicate, symbol
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
 
 
 # disable_caching()
 
-def test_empty_conditions(handles_and_containers_world):
+def test_empty_conditions(handles_and_containers_world, doors_and_drawers_world):
     world = handles_and_containers_world
+    world2 = doors_and_drawers_world
     query = an(entity(body := let("body", type_=Body, domain=world.bodies)))
     assert len(list(query.evaluate())) == len(world.bodies), "Should generate 6 bodies."
 

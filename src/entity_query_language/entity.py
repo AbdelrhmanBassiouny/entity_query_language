@@ -11,7 +11,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable
+    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode
 from .predicate import Predicate, HasType
 from .utils import is_iterable
 
@@ -96,7 +96,7 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Pr
     :rtype: Entity[T]
     """
     selected_variables, expression = _extract_variables_and_expression([selected_variable], *properties)
-    return Entity(selected_variables, expression, domain=domain)
+    return Entity(selected_variables=selected_variables, _child_=expression, domain=domain)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
@@ -111,7 +111,7 @@ def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpressio
     :rtype: SetOf[T]
     """
     selected_variables, expression = _extract_variables_and_expression(selected_variables, *properties)
-    return SetOf(selected_variables, expression)
+    return SetOf(selected_variables=selected_variables, _child_=expression)
 
 
 def _extract_variables_and_expression(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) \
@@ -130,11 +130,11 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
     expression_list = list(properties)
     selected_variables = list(selected_variables)
     for i, var in enumerate(selected_variables):
-        if not isinstance(var, HasDomain):
-            expression = var
-            var = var._get_var_(var)
-            if var._properties_ and var._domain_:
-                expression_list.append(expression)
+        if isinstance(var, ResultQuantifier):
+            result_quantifier = var
+            var = var._var_
+            if result_quantifier._child_._child_:
+                expression_list = [result_quantifier._child_._child_] + expression_list
             selected_variables[i] = var
     expression = None
     if len(expression_list) > 0:
@@ -142,7 +142,7 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
     return selected_variables, expression
 
 
-def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, HasDomain, Source]:
+def let(name: Optional[str] = None, type_: Optional[Type[T]] = None, domain: Optional[Any] = None) -> T:
     """
     Declare a symbolic variable or source.
 
@@ -153,20 +153,16 @@ def let(name: str, type_: Type[T], domain: Optional[Any] = None) -> Union[T, Has
     :type name: str
     :param type_: The expected Python type of items in the domain.
     :type type_: Type[T]
-    :param domain: Either a concrete iterable domain, a HasDomain/Source, or None.
+    :param domain: A value or a set of values to constrain the variable to.
     :type domain: Optional[Any]
     :return: A Variable or a Source depending on inputs.
-    :rtype: Union[T, HasDomain, Source]
+    :rtype: T
     """
-    if domain is None:
-        return Variable(name, type_)
-    elif isinstance(domain, (HasDomain, Source)):
-        return Variable(name, type_, _domain_=HasType(_child_=domain, _type_=(type_,)))
-    elif is_iterable(domain):
-        domain = HasType(_child_=Source(type_.__name__, domain), _type_=(type_,))
-        return Variable(name, type_, _domain_=domain)
-    else:
-        return Source(name, domain)
+    with symbolic_mode():
+        if domain is None:
+            return type_()
+        else:
+            return type_(From(domain))
 
 
 def and_(*conditions):

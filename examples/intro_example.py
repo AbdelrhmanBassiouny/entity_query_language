@@ -3,9 +3,10 @@ from entity_query_language import entity, an, let, and_, contains, the, Multiple
 from dataclasses import dataclass, field
 from typing_extensions import List
 
-from entity_query_language.rule import rule_mode
+from entity_query_language.symbolic import rule_mode
 
 
+@symbol
 @dataclass(eq=False)
 class Body:
     name: str
@@ -17,6 +18,7 @@ class Body:
         return hash(id(self))
 
 
+@symbol
 @dataclass(eq=False)
 class World:
     id_: int
@@ -79,23 +81,23 @@ results = list(result)
 assert len(results) == 1
 assert results[0].name == "Handle2"
 
-
+@symbol
 @dataclass
 class Connection:
     parent: Body
     child: Body
 
-
+@symbol
 @dataclass
 class Prismatic(Connection):
     ...
 
-
+@symbol
 @dataclass
 class Fixed(Connection):
     ...
 
-
+@symbol
 @dataclass
 class World:
     id_: int

@@ -8,9 +8,9 @@ from functools import wraps
 from typing_extensions import Callable, Any, Tuple, Optional, dataclass_transform, Type
 
 from .enums import EQLMode, PredicateType
-from .hashed_data import HashedValue, HashedIterable
+from .hashed_data import HashedValue
 from .hashed_data import T
-from .symbolic import SymbolicExpression, Variable, in_symbolic_mode, Entity, An, chained_logic, AND
+from .symbolic import SymbolicExpression, Variable, in_symbolic_mode, Entity, An, chained_logic, AND, From
 
 
 def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]]:
@@ -50,43 +50,89 @@ def symbol(cls):
     :param cls: The class to decorate.
     :return: The same class with a patched ``__new__``.
     """
-    orig_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
+    original_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
-            domain = kwargs.pop('domain', HashedIterable())
+            domain, kwargs = update_domain_and_kwargs_from_args(symbolic_cls,*args, **kwargs)
             predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
             # This mode is when we try to infer new instances of variables, this includes also evaluating predicates
             # because they also need to be inferred. So basically this mode is when there is no domain availabe and
             # we need to infer new values.
             if not domain and (in_symbolic_mode(EQLMode.Rule) or predicate_type):
-                return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _domain_=domain,
-                                _predicate_type_=predicate_type)
+                return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type)
             else:
                 # In this mode, we either have a domain through the `domain` provided here, or through the cache if
                 # the domain is not provided. Then we filter this domain by the provided constraints on the variable
                 # attributes given as keyword arguments.
-                var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_=domain, _predicate_type_=predicate_type)
-                if kwargs:
-                    conditions = [getattr(var, k) == v for k, v in kwargs.items()]
-                    if len(conditions) == 1:
-                        expression = conditions[0]
-                    else:
-                        expression = chained_logic(AND, *conditions)
-                    return An(Entity([var], expression))
-                else:
-                    return var
+                var, expression = extract_selected_variable_and_expression(symbolic_cls, domain, predicate_type,
+                                                                           **kwargs)
+                return An(Entity(expression, [var]))
         else:
-            instance = orig_new(symbolic_cls)
-            instance.__init__(*args, **kwargs)
-            kwargs = {f.name: HashedValue(getattr(instance, f.name)) for f in fields(instance) if f.init}
-            if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
-                Variable._cache_[symbolic_cls].keys = list(kwargs.keys())
-            Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
+            instance = instantiate_class_and_update_cache(symbolic_cls, original_new, *args, **kwargs)
             return instance
 
     cls.__new__ = symbolic_new
     return cls
+
+
+def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
+    """
+    Set the domain if provided as the first argument and update the kwargs with the remaining arguments.
+
+    :param symbolic_cls: The constructed class.
+    :param args: The positional arguments to the class constructor and optionally the domain.
+    :param kwargs: The keyword arguments to the class constructor.
+    :return: The domain and updated kwargs.
+    """
+    domain = None
+    for i, arg in enumerate(args):
+        if isinstance(arg, From):
+            domain = arg
+            if i > 0:
+                raise ValueError(f"First non-keyword-argument to {symbolic_cls.__name__} in symbolic mode should be"
+                                 f" a domain using `From()`.")
+        else:
+            arg_name = list(inspect.signature(symbolic_cls.__init__).parameters.keys())[i+1] # to skip `self`
+            kwargs[arg_name] = arg
+    return domain, kwargs
+
+
+def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optional[From] = None,
+                                             predicate_type: Optional[PredicateType] = None, **kwargs):
+    """
+    :param symbolic_cls: The constructed class.
+    :param domain: The domain source for the values of the variable by.
+    :param predicate_type: The predicate type.
+    :param kwargs: The keyword arguments to the class constructor.
+    :return: The selected variable and expression.
+    """
+    var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type)
+    conditions = [HasType(var, (symbolic_cls,))]
+    if kwargs:
+        conditions.extend([getattr(var, k) == v for k, v in kwargs.items()])
+    if len(conditions) == 1:
+        expression = conditions[0]
+    else:
+        expression = chained_logic(AND, *conditions)
+    return var, expression
+
+
+def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callable, *args, **kwargs):
+    """
+    :param symbolic_cls: The constructed class.
+    :param original_new: The original class __new__ method.
+    :param args: The positional arguments to the class constructor.
+    :param kwargs: The keyword arguments to the class constructor.
+    :return: The instantiated class.
+    """
+    instance = original_new(symbolic_cls)
+    instance.__init__(*args, **kwargs)
+    kwargs = {f.name: HashedValue(getattr(instance, f.name)) for f in fields(instance) if f.init}
+    if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
+        Variable._cache_[symbolic_cls].keys = list(kwargs.keys())
+    Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
+    return instance
 
 
 @symbol

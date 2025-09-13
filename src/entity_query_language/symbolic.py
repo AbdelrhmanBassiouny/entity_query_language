@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import UserDict, defaultdict
+from contextlib import contextmanager
 from copy import copy
+from typing import Any, Optional
 
 from . import logger
 from .enums import EQLMode, PredicateType
@@ -104,8 +106,7 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Variable._from_domain_([v])
         for k, v in children.items():
-            if v._node_.parent is not None and isinstance(v,
-                                                          (HasDomain, Source, ResultQuantifier, QueryObjectDescriptor)):
+            if v._node_.parent is not None and isinstance(v, (CanBehaveLikeAVariable, Source)):
                 children[k] = self._copy_child_expression_(v)
             children[k]._node_.parent = self._node_
         return tuple(children.values())
@@ -154,7 +155,7 @@ class SymbolicExpression(Generic[T], ABC):
         return SymbolicExpression._get_var_(operand)._id_
 
     @staticmethod
-    def _get_var_(operand: SymbolicExpression) -> HasDomain:
+    def _get_var_(operand: SymbolicExpression) -> CanBehaveLikeAVariable:
         """
         Get the main variable instance of the given operand, if it is A/An/The then get the selected variable,
         elif it is already a variable return it otherwise raise an error.
@@ -163,12 +164,12 @@ class SymbolicExpression(Generic[T], ABC):
         :type operand: SymbolicExpression
         :return: The variable instance.
         """
-        if isinstance(operand, (ResultQuantifier, Entity)):
-            return operand._parent_variable_
-        elif isinstance(operand, (HasDomain, Source)):
+        if isinstance(operand, CanBehaveLikeAVariable):
+            return operand._var_
+        elif isinstance(operand, Source):
             return operand
         elif isinstance(operand, SetOf):
-            raise ValueError(f"The operand {operand} does not have a single variable/HasDomain.")
+            raise ValueError(f"The operand {operand} does not have a single variable.")
         else:
             raise NotImplementedError(f"Getting the variable from operand {operand} is not handled")
 
@@ -446,6 +447,9 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
             return super().__ge__(other)
         return Comparator(self._var_, other, operator.ge)
 
+    def __hash__(self):
+        return super().__hash__()
+
 
 @dataclass(eq=False)
 class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
@@ -582,8 +586,8 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     Describes the queried object(s), could be a query over a single variable or a set of variables,
     also describes the condition(s)/properties of the queried object(s).
     """
-    selected_variables: List[SymbolicExpression[T]] = field(default_factory=list)
     _child_: Optional[SymbolicExpression[T]] = field(default=None)
+    selected_variables: List[CanBehaveLikeAVariable[T]] = field(default_factory=list)
     warned_vars: typing.Set = field(default_factory=set, init=False)
     rule_mode: bool = field(default=False, init=False)
 
@@ -592,7 +596,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         if in_symbolic_mode(EQLMode.Rule):
             self.rule_mode = True
 
-    def _evaluate_(self, selected_vars: Optional[Iterable[HasDomain]] = None,
+    def _evaluate_(self, selected_vars: Optional[Iterable[CanBehaveLikeAVariable]] = None,
                    sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         self._inform_selected_variables_that_they_should_be_inferred_()
         sources = sources or {}
@@ -628,7 +632,8 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         if self._child_:
             self._child_._reset_cache_()
 
-    def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue], selected_vars: Iterable[HasDomain]):
+    def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue],
+                                    selected_vars: Iterable[CanBehaveLikeAVariable]):
         """
         Warn the user if there are unbound variables in the query descriptor, because this will result in a cartesian
         product join operation.
@@ -716,25 +721,25 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable: Optional[Variable[T]] = field(default=None, init=False)
+    selected_variable: Optional[CanBehaveLikeAVariable[T]] = field(default=None, init=False)
     domain: Optional[Any] = field(default=None)
 
     def __post_init__(self):
-        if self.selected_variable is not None:
-            self.selected_variables.append(self.selected_variable)
-        super().__post_init__()
-        self.update_child_expression_with_variable_properties()
+        if self.selected_variables:
+            self.selected_variable = self.selected_variables[0]
         self._var_ = self.selected_variable
+        super().__post_init__()
+        # self.update_child_expression_with_variable_properties()
 
-    def update_child_expression_with_variable_properties(self):
-        """
-        Update the child expression with the properties of the variable.
-        """
-        if self.selected_variable and self.selected_variable._properties_ is not None:
-            if self._child_:
-                self._update_child_(chained_logic(AND, self._child_, *self.selected_variable._properties_))
-            else:
-                self._update_child_(chained_logic(AND, *self.selected_variable._properties_))
+    # def update_child_expression_with_variable_properties(self):
+    #     """
+    #     Update the child expression with the properties of the variable.
+    #     """
+    #     if self.selected_variable and self.selected_variable._properties_ is not None:
+    #         if self._child_:
+    #             self._update_child_(chained_logic(AND, self._child_, *self.selected_variable._properties_))
+    #         else:
+    #             self._update_child_(chained_logic(AND, *self.selected_variable._properties_))
 
     @property
     def _name_(self) -> str:
@@ -774,6 +779,17 @@ class Entity(QueryObjectDescriptor[T]):
         return vars
 
 
+@dataclass
+class From:
+    """
+    A dataclass that holds the domain for a symbolic variable, this will be used instead of the global cache
+    of the variable class type.
+    """
+    domain: Any
+    """
+    The domain to use for the symbolic variable.
+    """
+
 
 @dataclass(eq=False)
 class Variable(CanBehaveLikeAVariable[T]):
@@ -789,9 +805,15 @@ class Variable(CanBehaveLikeAVariable[T]):
     """
     The properties of the variable as keyword arguments.
     """
-    _domain_: Union[SymbolicExpression, Iterable] = field(default_factory=HashedIterable, kw_only=True)
+    _domain_source_: Optional[From] = field(default=None, kw_only=True)
     """
-    Redefined from super class to make it keyword only instead of not in the init.
+    An optional source for the variable domain. If not given, the global cache of the variable class type will be used
+    as the domain, or if kwargs are given the type and the kwargs will be used to create/infer new values for the
+    variable.
+    """
+    _domain_: HashedIterable = field(default_factory=HashedIterable, kw_only=True)
+    """
+    The iterable domain of values for this variable.
     """
     _invert_: bool = field(init=False, default=False)
     """
@@ -809,7 +831,7 @@ class Variable(CanBehaveLikeAVariable[T]):
     """
     A mapping from variable type to an indexed cache of all seen inputs and outputs of the variable type. 
     """
-    _child_vars_: Optional[Dict[str, SymbolicExpression]] = field(default=None, init=False)
+    _child_vars_: Optional[Dict[str, SymbolicExpression]] = field(default_factory=dict, init=False)
     """
     A dictionary mapping child variable names to variables, these are from the _kwargs_ dictionary. 
     """
@@ -817,31 +839,27 @@ class Variable(CanBehaveLikeAVariable[T]):
     def __post_init__(self):
         self._validate_inputs_and_fill_missing_ones_()
         self._var_ = self
-        self._update_domain_(self._domain_)
         super().__post_init__()
+        # has to be after super init because this needs the node of this variable to be initialized first.
         self._update_child_vars_from_kwargs_()
-
-    def _update_domain_(self, domain):
-        if domain:
-            if isinstance(domain, Source):
-                domain = domain._evaluate__().value
-            elif isinstance(domain, SymbolicExpression):
-                domain = (next(iter(v.values())) for v in domain._evaluate__())
-            elif not is_iterable(domain):
-                domain = [HashedValue(domain)]
-            if isinstance(self._domain_, HashedIterable):
-                self._domain_.set_iterable(domain)
-            else:
-                self._domain_ = HashedIterable(domain)
 
     def _validate_inputs_and_fill_missing_ones_(self):
         if self._kwargs_ and not self._type_:
             raise ValueError(f"Variable {self._name_} has class keyword arguments but no type is specified.")
         self._child_ = None
+        if self._domain_source_:
+            self._update_domain_(self._domain_source_.domain)
+
+    def _update_domain_(self, domain):
+        if domain:
+            if isinstance(domain, SymbolicExpression):
+                domain = (next(iter(v.values())) for v in domain._evaluate__())
+            elif not is_iterable(domain):
+                domain = [HashedValue(domain)]
+            self._domain_.set_iterable(domain)
 
     def _update_child_vars_from_kwargs_(self):
         if self._kwargs_:
-            self._child_vars_ = {}
             for k, v in self._kwargs_.items():
                 if isinstance(v, SymbolicExpression):
                     self._child_vars_[k] = v
@@ -956,7 +974,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         variables = [self]
         if self._kwargs_:
             for v in self._kwargs_.values():
-                if isinstance(v, HasDomain):
+                if isinstance(v, Variable):
                     variables.extend(v._all_variable_instances_)
         return variables
 
@@ -975,6 +993,10 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
     """
     _child_: CanBehaveLikeAVariable[T]
     _invert_: bool = field(init=False, default=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._var_ = self
 
     @property
     @lru_cache(maxsize=None)
@@ -1189,7 +1211,7 @@ class Comparator(BinaryOperator):
         else:
             return self.left, self.right
 
-    def get_result_domain(self, operand_value_map: Dict[HasDomain, HashedValue]) -> HashedIterable:
+    def get_result_domain(self, operand_value_map: Dict[CanBehaveLikeAVariable, HashedValue]) -> HashedIterable:
         left_leaf_value = self.left._var_._domain_[operand_value_map[self.left].id_]
         right_leaf_value = self.right._var_._domain_[operand_value_map[self.right].id_]
         return HashedIterable(values={self.left._var_._id_: left_leaf_value,
@@ -1358,3 +1380,35 @@ def chained_logic(operator: Type[LogicalOperator], *conditions):
             continue
         prev_operation = operator(prev_operation, condition)
     return prev_operation
+
+
+@contextmanager
+def rule_mode(query: Optional[SymbolicExpression] = None):
+    """
+    Wrapper around symbolic construction mode to easily enable rule mode
+    """
+    # delegate to symbolic_mode
+    with symbolic_mode(query, EQLMode.Rule) as ctx:
+        yield ctx
+
+
+@contextmanager
+def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQLMode.Query):
+    """
+    Context manager to temporarily enable symbolic construction mode.
+
+    Within the context, calling classes decorated with ``@symbol`` produces
+    symbolic Variables instead of real instances.
+
+    :param query: Optional symbolic expression to also enter/exit as a context.
+    """
+    prev_mode = _symbolic_mode.get()
+    try:
+        if query is not None:
+            query.__enter__()
+        _set_symbolic_mode(mode)
+        yield SymbolicExpression._current_parent_()
+    finally:
+        if query is not None:
+            query.__exit__()
+        _set_symbolic_mode(prev_mode)
