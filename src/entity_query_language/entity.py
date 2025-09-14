@@ -11,8 +11,8 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode
-from .predicate import Predicate, HasType
+    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, \
+    HasType, Predicate
 from .utils import is_iterable
 
 T = TypeVar('T')  # Define type variable "T"
@@ -119,15 +119,17 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
     :return: Tuple of selected variables and expressions.
     :rtype: Tuple[List[T], List[SymbolicExpression]]
     """
-    expression_list = list(properties)
+    final_expression_list = list(properties)
+    expression_list = []
     selected_variables = list(selected_variables)
     for i, var in enumerate(selected_variables):
         if isinstance(var, ResultQuantifier):
             result_quantifier = var
             var = var._var_
             if result_quantifier._child_._child_:
-                expression_list = [result_quantifier._child_._child_] + expression_list
+                expression_list.append(result_quantifier._child_._child_)
             selected_variables[i] = var
+    expression_list += final_expression_list
     expression = None
     if len(expression_list) > 0:
         expression = and_(*expression_list) if len(expression_list) > 1 else expression_list[0]

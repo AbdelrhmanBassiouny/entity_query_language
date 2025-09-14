@@ -2,12 +2,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from entity_query_language import and_, not_, contains, in_, symbolic_mode, From
+from entity_query_language import and_, not_, contains, in_, symbolic_mode, From, predicate, symbol, Predicate
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
-from entity_query_language import an, entity, set_of, let, the, or_, predicate, a
+from entity_query_language import an, entity, set_of, let, the, or_, a
 from entity_query_language.failures import MultipleSolutionFound
-from entity_query_language.predicate import Predicate, symbol, HasType
-from entity_query_language.symbolic import Variable
+from entity_query_language.symbolic import Variable, HasType
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
 
 
@@ -127,7 +126,7 @@ def test_filtering_connections_without_joining_with_parent_or_child_queries(hand
     with symbolic_mode():
         query = a(connection := Connection(From(world.connections)), HasType(connection.parent, Container),
                   connection.parent.name == "Container1", HasType(connection.child, Handle))
-    query._render_tree_()
+    # query._render_tree_()
     results = list(query.evaluate())
     assert len(results) == 1, "Should generate 1 connections."
     assert results[0].parent.name == "Container1"
@@ -367,7 +366,7 @@ def test_generate_with_more_than_one_source_predicate_form(handles_and_container
                           fixed_connection := FixedConnection(From(world.connections), parent=container, child=handle)
                           ]))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 2, "Should generate components for two possible drawer."
@@ -375,6 +374,26 @@ def test_generate_with_more_than_one_source_predicate_form(handles_and_container
         assert sol[container] == sol[fixed_connection].parent
         assert sol[handle] == sol[fixed_connection].child
         assert sol[prismatic_connection].child == sol[fixed_connection].parent
+
+
+def test_generate_with_more_than_one_source_optimized(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    with symbolic_mode():
+        q1 = a(fixed_connection:=FixedConnection(From(world.connections)),
+          HasType(fixed_connection.parent, Container),
+          HasType(fixed_connection.child, Handle))
+        q2 = a(prismatic_connection:=PrismaticConnection(From(world.connections)))
+        query = a(set_of([q1, q2], prismatic_connection.child == fixed_connection.parent))
+
+        query._render_tree_()
+
+        all_solutions = list(query.evaluate())
+        assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+        for sol in all_solutions:
+            assert isinstance(sol[fixed_connection].parent, Container)
+            assert isinstance(sol[fixed_connection].child, Handle)
+            assert sol[prismatic_connection].child == sol[fixed_connection].parent
 
 
 def test_sources(handles_and_containers_world):
@@ -534,8 +553,8 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
     # assert all(not IsHandle(b).should_infer for b in world.bodies), ("All seen items should not be inferred again"
     #                                                                  " but retrieved.")
     assert all(not IsHandle(b)() for b in world.bodies if b not in handles), ("All not generated items "
-                                                                                              "should not satisfy the "
-                                                                                              "predicate.")
+                                                                              "should not satisfy the "
+                                                                              "predicate.")
 
 
 def test_nested_query_with_or(handles_and_containers_world):
@@ -646,7 +665,7 @@ def test_nested_query_with_multi_or(handles_and_containers_world):
 
 
 def test_nested_query_with_multiple_sources(handles_and_containers_world):
-    world = let(type_=World, domain=handles_and_containers_world)
+    world = handles_and_containers_world
     container = let(type_=Container, domain=world.bodies)
     handle = let(type_=Handle, domain=world.bodies)
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
@@ -659,7 +678,7 @@ def test_nested_query_with_multiple_sources(handles_and_containers_world):
                                container == prismatic_connection.child
                                )
                         )
-    original_query._render_tree_()
+    # original_query._render_tree_()
     original_query_results = list(original_query.evaluate())
     assert len(original_query_results) == 2, "Should generate 2 drawer components"
 
