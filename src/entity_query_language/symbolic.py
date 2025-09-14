@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import UserDict, defaultdict
 from contextlib import contextmanager
 from copy import copy
+from email._header_value_parser import Domain
 from typing import Any, Optional
 
 from . import logger
@@ -106,7 +107,8 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Variable._from_domain_([v])
         for k, v in children.items():
-            if v._node_.parent is not None and isinstance(v, (CanBehaveLikeAVariable, Source)):
+            if (v._node_.parent is not None and isinstance(v, CanBehaveLikeAVariable)
+                    and v._node_.parent is not self._node_):
                 children[k] = self._copy_child_expression_(v)
             children[k]._node_.parent = self._node_
         return tuple(children.values())
@@ -118,8 +120,8 @@ class SymbolicExpression(Generic[T], ABC):
         child_cp.__dict__.update(child.__dict__)
         child_cp._seen_parent_values_ = {True: SeenSet(), False: SeenSet()}
         child_cp._create_node_(child._node_.name + f"_{self._id_}")
-        if hasattr(child_cp, "_child_") and child_cp._child_ is not None:
-            child_cp._update_child_()
+        if child._children_:
+            child_cp._update_children_(*child._children_)
         return child_cp
 
     def _create_node_(self, name: str):
@@ -256,6 +258,15 @@ class SymbolicExpression(Generic[T], ABC):
     @lru_cache(maxsize=None)
     def _parent_variable_(self) -> Variable:
         return self._all_variable_instances_[0] if self._all_variable_instances_ else None
+
+    @property
+    def _sources_(self):
+        vars = [v._expression_ for v in self._node_.leaves]
+        while any(isinstance(v, SymbolicExpression) for v in vars):
+            vars = {v._domain_source_.domain for v in vars if isinstance(v, SymbolicExpression) and v._domain_source_}
+            vars = {v._parent_variable_ if isinstance(v, SymbolicExpression) else v for v in vars}
+        sources = set(HashedIterable(vars))
+        return sources
 
     @property
     @lru_cache(maxsize=None)
@@ -722,28 +733,16 @@ class Entity(QueryObjectDescriptor[T]):
     A query over a single variable.
     """
     selected_variable: Optional[CanBehaveLikeAVariable[T]] = field(default=None, init=False)
-    domain: Optional[Any] = field(default=None)
 
     def __post_init__(self):
         if self.selected_variables:
             self.selected_variable = self.selected_variables[0]
         self._var_ = self.selected_variable
         super().__post_init__()
-        # self.update_child_expression_with_variable_properties()
-
-    # def update_child_expression_with_variable_properties(self):
-    #     """
-    #     Update the child expression with the properties of the variable.
-    #     """
-    #     if self.selected_variable and self.selected_variable._properties_ is not None:
-    #         if self._child_:
-    #             self._update_child_(chained_logic(AND, self._child_, *self.selected_variable._properties_))
-    #         else:
-    #             self._update_child_(chained_logic(AND, *self.selected_variable._properties_))
 
     @property
     def _name_(self) -> str:
-        return f"Entity({self.selected_variable._name_ if self.selected_variable else ''})"
+        return f"Entity(\"{self.selected_variable._name_ if self.selected_variable else ''}\")"
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         required_vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
@@ -852,6 +851,8 @@ class Variable(CanBehaveLikeAVariable[T]):
 
     def _update_domain_(self, domain):
         if domain:
+            if isinstance(domain, HashedIterable):
+                self._domain_ = domain
             if isinstance(domain, SymbolicExpression):
                 domain = (next(iter(v.values())) for v in domain._evaluate__())
             elif not is_iterable(domain):
@@ -875,7 +876,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         """
         sources = sources or {}
         if self._id_ in sources:
-            yield {self._id_: sources[self._id_]}
+            yield sources
         elif self._domain_:
             yield from self
         elif self._type_:
@@ -957,8 +958,8 @@ class Variable(CanBehaveLikeAVariable[T]):
         if not isinstance(iterable, SymbolicExpression) and not is_iterable(iterable):
             iterable = HashedIterable([iterable])
         if not clazz:
-            if isinstance(iterable, (Entity, ResultQuantifier, Variable)):
-                clazz = iterable._parent_variable_._type_
+            if isinstance(iterable, CanBehaveLikeAVariable):
+                clazz = iterable._var_._type_
             else:
                 clazz = type(next(iter(iterable)))
         if name is None:
@@ -966,16 +967,17 @@ class Variable(CanBehaveLikeAVariable[T]):
                 name = clazz.__name__
             else:
                 name = "Var"
-        return Variable(name, clazz, _domain_=iterable)
+        return Variable(name, clazz, _domain_source_=From(iterable))
 
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
         variables = [self]
-        if self._kwargs_:
-            for v in self._kwargs_.values():
-                if isinstance(v, Variable):
-                    variables.extend(v._all_variable_instances_)
+        for v in self._child_vars_.values():
+            variables.extend(v._all_variable_instances_)
+        if self._domain_source_:
+            if isinstance(self._domain_source_.domain, SymbolicExpression):
+                variables.extend(self._domain_source_.domain._all_variable_instances_)
         return variables
 
     def __iter__(self):

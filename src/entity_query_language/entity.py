@@ -20,7 +20,7 @@ T = TypeVar('T')  # Define type variable "T"
 
 def an(entity_: Optional[Union[SetOf[T], Entity[T], T, Iterable[T], Type[T]]] = None,
        *properties: Union[SymbolicExpression, bool],
-       domain: Optional[Any]=None, has_type: Optional[Type[T]] = None) -> Union[An[T], T, SymbolicExpression[T]]:
+       has_type: Optional[Type[T]] = None) -> Union[An[T], T, SymbolicExpression[T]]:
     """
     Select a single element satisfying the given entity description.
 
@@ -28,14 +28,12 @@ def an(entity_: Optional[Union[SetOf[T], Entity[T], T, Iterable[T], Type[T]]] = 
     :type entity_: Union[SetOf[T], Entity[T]]
     :param properties: Conditions that define the entity.
     :type properties: Union[SymbolicExpression, bool]
-    :param domain: Optional domain to constrain the selected variable.
-    :type domain: Optional[Any]
     :param has_type: Optional type to constrain the selected variable.
     :type has_type: Optional[Type[T]]
     :return: A quantifier representing "an" element.
     :rtype: An[T]
     """
-    return _an_or_the(An, entity_, *properties, domain=domain, has_type=has_type)
+    return _an_or_the(An, entity_, *properties, has_type=has_type)
 
 
 a = an
@@ -44,8 +42,8 @@ This is an alias to accommodate for words not starting with vowels.
 """
 
 
-def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *properties: Union[SymbolicExpression, bool],
-       domain: Optional[Any]=None, has_type: Optional[Type[T]] = None) -> The[T]:
+def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *properties: Union[SymbolicExpression, bool]
+        , has_type: Optional[Type[T]] = None) -> The[T]:
     """
     Select the unique element satisfying the given entity description.
 
@@ -53,19 +51,16 @@ def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *pro
     :type entity_: Union[SetOf[T], Entity[T]]
     :param properties: Conditions that define the entity.
     :type properties: Union[SymbolicExpression, bool]
-    :param domain: Optional domain to constrain the selected variable.
-    :type domain: Optional[Any]
     :param has_type: Optional type to constrain the selected variable.
     :type has_type: Optional[Type[T]]
     :return: A quantifier representing "an" element.
     :rtype: The[T]
     """
-    return _an_or_the(The, entity_, *properties, domain=domain, has_type=has_type)
+    return _an_or_the(The, entity_, *properties, has_type=has_type)
 
 
 def _an_or_the(quantifier: Union[Type[An], Type[The]],
                entity_: Union[SetOf[T], Entity[T], Type[T], None], *properties: Union[SymbolicExpression, bool],
-               domain: Optional[Any]=None,
                has_type: Optional[Type[T]] = None) -> Union[An[T], The[T]]:
     if isinstance(entity_, type):
         entity_ = entity_()
@@ -74,15 +69,14 @@ def _an_or_the(quantifier: Union[Type[An], Type[The]],
     if isinstance(entity_, (Entity, SetOf)):
         return quantifier(entity_)
     elif isinstance(entity_, CanBehaveLikeAVariable):
-        return quantifier(entity(entity_, *properties, domain=domain))
+        return quantifier(entity(entity_, *properties))
     elif isinstance(entity_, (list, tuple)):
         return quantifier(set_of(entity_, *properties))
     else:
         raise ValueError(f'Invalid entity: {entity_}')
 
 
-def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate],
-           domain: Optional[Any] = None) -> Entity[T]:
+def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate]) -> Entity[T]:
     """
     Create an entity descriptor from a selected variable and its properties.
 
@@ -90,13 +84,11 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Pr
     :type selected_variable: T
     :param properties: Conditions that define the entity.
     :type properties: Union[SymbolicExpression, bool]
-    :param domain: Optional domain to constrain the selected variable.
-    :type domain: Optional[Any]
     :return: Entity descriptor.
     :rtype: Entity[T]
     """
     selected_variables, expression = _extract_variables_and_expression([selected_variable], *properties)
-    return Entity(selected_variables=selected_variables, _child_=expression, domain=domain)
+    return Entity(selected_variables=selected_variables, _child_=expression)
 
 
 def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
@@ -142,27 +134,30 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
     return selected_variables, expression
 
 
-def let(name: Optional[str] = None, type_: Optional[Type[T]] = None, domain: Optional[Any] = None) -> T:
+def let(type_: Type[T], domain: Optional[Any] = None, name: Optional[str] = None) -> T:
     """
     Declare a symbolic variable or source.
 
     If a domain is provided, the variable will iterate over that domain; otherwise
     a free variable is returned that can be bound by constraints.
 
-    :param name: Variable or source name.
-    :type name: str
     :param type_: The expected Python type of items in the domain.
     :type type_: Type[T]
     :param domain: A value or a set of values to constrain the variable to.
     :type domain: Optional[Any]
-    :return: A Variable or a Source depending on inputs.
+    :param name: Variable or source name.
+    :type name: str
+    :return: A Variable with the given type, name, and domain.
     :rtype: T
     """
     with symbolic_mode():
         if domain is None:
-            return type_()
+            var = type_()
         else:
-            return type_(From(domain))
+            var = type_(From(domain))
+    if name is not None:
+        var._name__ = name
+    return var
 
 
 def and_(*conditions):
