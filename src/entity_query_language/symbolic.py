@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import inspect
 from collections import UserDict, defaultdict
 from contextlib import contextmanager
 from copy import copy
-from email._header_value_parser import Domain
-from typing import Any, Optional, Callable, dataclass_transform, Type, Tuple
+
+from line_profiler import profile
 
 from . import logger
 from .enums import EQLMode, PredicateType
@@ -20,8 +19,8 @@ import contextvars
 import operator
 import typing
 from abc import abstractmethod, ABC
-from dataclasses import dataclass, field, fields
-from functools import lru_cache, wraps
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar, TYPE_CHECKING
@@ -145,36 +144,6 @@ class SymbolicExpression(Generic[T], ABC):
         self._yield_when_false__ = value
         for child in self._children_:
             child._yield_when_false_ = value
-
-    @staticmethod
-    def _get_var_id_(operand: SymbolicExpression) -> int:
-        """
-        Get the id of the variable/main-variable instance of the given operand.
-
-        :param operand: The operand to get the variable id from.
-        :type operand: SymbolicExpression
-        :return: The variable id.
-        """
-        return SymbolicExpression._get_var_(operand)._id_
-
-    @staticmethod
-    def _get_var_(operand: SymbolicExpression) -> CanBehaveLikeAVariable:
-        """
-        Get the main variable instance of the given operand, if it is A/An/The then get the selected variable,
-        elif it is already a variable return it otherwise raise an error.
-
-        :param operand: The operand to get the variable from.
-        :type operand: SymbolicExpression
-        :return: The variable instance.
-        """
-        if isinstance(operand, CanBehaveLikeAVariable):
-            return operand._var_
-        elif isinstance(operand, Source):
-            return operand
-        elif isinstance(operand, SetOf):
-            raise ValueError(f"The operand {operand} does not have a single variable.")
-        else:
-            raise NotImplementedError(f"Getting the variable from operand {operand} is not handled")
 
     @abstractmethod
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -826,6 +795,10 @@ class Variable(CanBehaveLikeAVariable[T]):
     """
     Whether this variable should be inferred.
     """
+    _is_cached_: bool = field(default=True)
+    """
+    Whether this variable should use caching.
+    """
     _cache_: ClassVar[Dict[Type, IndexedCache]] = defaultdict(IndexedCache)
     """
     A mapping from variable type to an indexed cache of all seen inputs and outputs of the variable type. 
@@ -884,41 +857,83 @@ class Variable(CanBehaveLikeAVariable[T]):
         elif self._type_:
             yield from self._instantiate_new_values_or_yield_from_cache_(sources)
 
+    @profile
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
+        # Precompute generators only when we have child vars
         if self._child_vars_:
-            kwargs_generators = {k: v._evaluate__(sources)
-                                 for k, v in self._child_vars_.items()}
-            kwargs_combinations = generate_combinations(kwargs_generators)
+            for kwargs in self._generate_combinations_for_child_vars_values_(sources):
+                yield from self._yield_from_cache_or_instantiate_new_values_(sources, kwargs)
         else:
-            kwargs_combinations = [{}]
-        for kwargs in kwargs_combinations:
-            retrieved = False
-            if not self._is_inferred_:
-                for v in self._search_and_yield_from_cache_(**kwargs):
-                    retrieved = True
+            yield from self._yield_from_cache_or_instantiate_new_values_(sources)
+
+    @profile
+    def _generate_combinations_for_child_vars_values_(self, sources: Optional[Dict[int, HashedValue]] = None):
+        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()
+                             if v._id_ in sources}
+        yield from generate_combinations(kwargs_generators)
+
+    @profile
+    def _yield_from_cache_or_instantiate_new_values_(self, sources: Optional[Dict[int, HashedValue]] = None,
+                                                     kwargs: Dict[str, Dict[int, HashedValue]] = None):
+        kwargs = kwargs or {}
+        # Try cache fast-path first when allowed
+        retrieved = False
+        if (not self._is_inferred_) and self._is_cached_:
+            for v in self._search_and_yield_from_cache_(**kwargs):
+                retrieved = True
+                if sources:
                     v.update(sources)
-                    yield v
-            if not retrieved and (self._is_inferred_ or self._is_predicate_):
-                unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] for k, v in kwargs.items()}
-                unbound_kwargs = {k: v._evaluate__(sources)
-                                  for k, v in self._child_vars_.items() if k not in unwrapped_hashed_kwargs}
-                for extra_kwargs in generate_combinations(unbound_kwargs):
-                    kwargs.update(extra_kwargs)
-                    unwrapped_hashed_kwargs.update({k: v[self._get_var_id_(self._child_vars_[k])]
-                                                    for k, v in extra_kwargs.items()})
-                    instance = self._type_(**{k: v.value for k, v in unwrapped_hashed_kwargs.items()})
-                    yield from self._process_output_and_update_values_(instance, **kwargs)
+                yield v
+
+        # If nothing retrieved and we are allowed to instantiate
+        if (not retrieved) and (self._is_inferred_ or self._predicate_type_):
+            yield from self._instantiate_new_values_and_yield_results_(kwargs, sources)
+
+    @profile
+    def _instantiate_new_values_and_yield_results_(self, kwargs: Dict[str, Dict[int, HashedValue]],
+                                                   sources: Optional[Dict[int, HashedValue]] = None) \
+            -> Iterable[Dict[int, HashedValue]]:
+        # Build once: unwrapped hashed kwargs for already provided child vars
+        bound_kwargs = {k: v[self._child_vars_[k]._id_] for k, v in kwargs.items()}
+        # For missing kwargs, evaluate their generators lazily
+        unbound_kwargs = {k: v._evaluate__(sources)
+                          for k, v in self._child_vars_.items() if k not in bound_kwargs}
+        if unbound_kwargs:
+            yield from self._bind_unbound_kwargs_and_yield_results_(kwargs, unbound_kwargs, bound_kwargs)
+        else:
+            instance = self._type_(**{k: hv.value for k, hv in bound_kwargs.items()})
+            yield from self._process_output_and_update_values_(instance, **kwargs)
+
+    @profile
+    def _bind_unbound_kwargs_and_yield_results_(self, kwargs: Dict[str, Dict[int, HashedValue]],
+                                                unbound_kwargs: Dict[str, Iterable],
+                                                bound_kwargs: Dict[str, HashedValue]):
+        for extra_kwargs in generate_combinations(unbound_kwargs):
+            # Avoid mutating the shared kwargs dict; work on a shallow copy
+            merged_kwargs = dict(kwargs)
+            merged_kwargs.update(extra_kwargs)
+            # Update unwrapped hashed args from the delta only
+            for k, v in extra_kwargs.items():
+                bound_kwargs[k] = v[self._child_vars_[k]._id_]
+            instance = self._type_(**{k: hv.value for k, hv in bound_kwargs.items()})
+            yield from self._process_output_and_update_values_(instance, **merged_kwargs)
+
+    @profile
+    def _search_and_yield_from_cache_(self, **kwargs):
+        unwrapped_hashed_kwargs = {k: v[self._child_vars_[k]._id_] for k, v in kwargs.items()}
+        if self._type_ not in self._cache_ or not self._cache_[self._type_].keys:
+            self._cache_[self._type_].keys = list(unwrapped_hashed_kwargs.keys())
+        cache_keys = self._cache_keys_for_var_type_
+        for t in cache_keys:
+            for found_kwargs, value in self._cache_[t].retrieve(unwrapped_hashed_kwargs):
+                yield from self._process_output_and_update_values_(value.value, **kwargs)
 
     @property
-    def _is_predicate_(self):
-        return self._predicate_type_ in [PredicateType.SubClassOfPredicate, PredicateType.DecoratedMethod]
-
-    def _search_and_yield_from_cache_(self, **kwargs):
-        unwrapped_hashed_kwargs = {k: v[self._get_var_id_(self._child_vars_[k])] if isinstance(v, dict) else v
-                                   for k, v in kwargs.items()}
-        if self._type_ not in self._cache_.keys() or not self._cache_[self._type_].keys:
-            self._cache_[self._type_].keys = list(unwrapped_hashed_kwargs.keys())
+    def _cache_keys_for_var_type_(self) -> List[Type]:
+        """
+        Get the cache keys for the given class which are its subclasses and itself.
+        """
         cache_keys = [self._type_]
         if isinstance(self._type_, type):
             for t in self._cache_.keys():
@@ -926,10 +941,9 @@ class Variable(CanBehaveLikeAVariable[T]):
                     continue
                 if isinstance(t, type) and issubclass(t, self._type_):
                     cache_keys.append(t)
-        for t in cache_keys:
-            for found_kwargs, value in self._cache_[t].retrieve(unwrapped_hashed_kwargs):
-                yield from self._process_output_and_update_values_(value.value, **kwargs)
+        return cache_keys
 
+    @profile
     def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:
         """
         Process the output of the predicate/variable and get the results.
@@ -1192,10 +1206,10 @@ class Comparator(BinaryOperator):
         first_values = first_operand._evaluate__(sources)
         for first_value in first_values:
             first_value.update(sources)
-            operand_value_map = {first_operand._id_: first_value[self._get_var_id_(first_operand)]}
+            operand_value_map = {first_operand._id_: first_value[first_operand._id_]}
             second_values = second_operand._evaluate__(first_value)
             for second_value in second_values:
-                operand_value_map[second_operand._id_] = second_value[self._get_var_id_(second_operand)]
+                operand_value_map[second_operand._id_] = second_value[second_operand._id_]
                 res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
@@ -1418,151 +1432,3 @@ def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQ
         _set_symbolic_mode(prev_mode)
 
 
-def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]]:
-    """
-    Function decorator that constructs a symbolic expression representing the function call
-     when inside a symbolic_rule context.
-
-    When symbolic mode is active, calling the method returns a Call instance which is a SymbolicExpression bound to
-    representing the method call that is not evaluated until the evaluate() method is called on the query/rule.
-
-    :param function: The function to decorate.
-    :return: The decorated function.
-    """
-
-    @wraps(function)
-    def wrapper(*args, **kwargs) -> Optional[Any]:
-        if in_symbolic_mode():
-            function_arg_names = [pname for pname, p in inspect.signature(function).parameters.items()
-                                  if p.default == inspect.Parameter.empty]
-            kwargs.update(dict(zip(function_arg_names, args)))
-            return Variable(function.__name__, function, _kwargs_=kwargs,
-                            _predicate_type_=PredicateType.DecoratedMethod)
-        return function(*args, **kwargs)
-
-    return wrapper
-
-
-@dataclass_transform()
-def symbol(cls):
-    """
-    Class decorator that makes a class construct symbolic Variables when inside
-    a symbolic_rule context.
-
-    When symbolic mode is active, calling the class returns a Variable bound to
-    either a provided domain or to deferred keyword domain sources.
-
-    :param cls: The class to decorate.
-    :return: The same class with a patched ``__new__``.
-    """
-    original_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
-
-    def symbolic_new(symbolic_cls, *args, **kwargs):
-        if in_symbolic_mode():
-            domain, kwargs = update_domain_and_kwargs_from_args(symbolic_cls,*args, **kwargs)
-            predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
-            # This mode is when we try to infer new instances of variables, this includes also evaluating predicates
-            # because they also need to be inferred. So basically this mode is when there is no domain availabe and
-            # we need to infer new values.
-            if not domain and (in_symbolic_mode(EQLMode.Rule) or predicate_type):
-                return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type)
-            else:
-                # In this mode, we either have a domain through the `domain` provided here, or through the cache if
-                # the domain is not provided. Then we filter this domain by the provided constraints on the variable
-                # attributes given as keyword arguments.
-                var, expression = extract_selected_variable_and_expression(symbolic_cls, domain, predicate_type,
-                                                                           **kwargs)
-                return An(Entity(expression, [var]))
-        else:
-            instance = instantiate_class_and_update_cache(symbolic_cls, original_new, *args, **kwargs)
-            return instance
-
-    cls.__new__ = symbolic_new
-    return cls
-
-
-def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
-    """
-    Set the domain if provided as the first argument and update the kwargs with the remaining arguments.
-
-    :param symbolic_cls: The constructed class.
-    :param args: The positional arguments to the class constructor and optionally the domain.
-    :param kwargs: The keyword arguments to the class constructor.
-    :return: The domain and updated kwargs.
-    """
-    domain = None
-    for i, arg in enumerate(args):
-        if isinstance(arg, From):
-            domain = arg
-            if i > 0:
-                raise ValueError(f"First non-keyword-argument to {symbolic_cls.__name__} in symbolic mode should be"
-                                 f" a domain using `From()`.")
-        else:
-            arg_name = list(inspect.signature(symbolic_cls.__init__).parameters.keys())[i+1] # to skip `self`
-            kwargs[arg_name] = arg
-    return domain, kwargs
-
-
-def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optional[From] = None,
-                                             predicate_type: Optional[PredicateType] = None, **kwargs):
-    """
-    :param symbolic_cls: The constructed class.
-    :param domain: The domain source for the values of the variable by.
-    :param predicate_type: The predicate type.
-    :param kwargs: The keyword arguments to the class constructor.
-    :return: The selected variable and expression.
-    """
-    if domain and is_iterable(domain.domain):
-        domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
-    var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type)
-    conditions = []
-    if kwargs:
-        conditions.extend([getattr(var, k) == v for k, v in kwargs.items()])
-    expression = None
-    if len(conditions) == 1:
-        expression = conditions[0]
-    elif len(conditions) > 1:
-        expression = chained_logic(AND, *conditions)
-    return var, expression
-
-
-def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callable, *args, **kwargs):
-    """
-    :param symbolic_cls: The constructed class.
-    :param original_new: The original class __new__ method.
-    :param args: The positional arguments to the class constructor.
-    :param kwargs: The keyword arguments to the class constructor.
-    :return: The instantiated class.
-    """
-    instance = original_new(symbolic_cls)
-    instance.__init__(*args, **kwargs)
-    kwargs = {f.name: HashedValue(getattr(instance, f.name)) for f in fields(instance) if f.init}
-    if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
-        Variable._cache_[symbolic_cls].keys = list(kwargs.keys())
-    Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
-    return instance
-
-
-@symbol
-@dataclass(eq=False)
-class Predicate(ABC):
-    """
-    The super predicate class that represents a filtration operation.
-    """
-
-    @abstractmethod
-    def __call__(self) -> Any:
-        """
-        Evaluate the predicate with the current arguments and return the results.
-        This method should be implemented by subclasses.
-        """
-        ...
-
-
-@dataclass(eq=False)
-class HasType(Predicate):
-    variable: Any
-    types_: Tuple[Type, ...]
-
-    def __call__(self) -> bool:
-        return isinstance(self.variable, self.types_)

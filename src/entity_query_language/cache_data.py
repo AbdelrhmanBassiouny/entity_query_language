@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from copy import copy
+from functools import lru_cache, cached_property
+
+from line_profiler import profile
 
 from . import logger
 
@@ -196,16 +199,26 @@ class IndexedCache:
     :ivar enter_count: Diagnostic counter for retrieval entries.
     :ivar search_count: Diagnostic counter for wildcard searches.
     """
-    keys: List[Hashable] = field(default_factory=list)
+    _keys: List[Hashable] = field(default_factory=list)
     seen_set: SeenSet = field(default_factory=SeenSet, init=False)
     cache: CacheDict = field(default_factory=CacheDict, init=False)
     enter_count: int = field(default=0, init=False)
     search_count: int = field(default=0, init=False)
 
-    def __post_init__(self) -> None:
-        """Ensure keys remain sorted for deterministic traversal."""
-        self.keys.sort()
+    def __post_init__(self):
+        self.keys = self._keys
 
+    @property
+    def keys(self) -> List[Hashable]:
+        return self._keys
+
+    @keys.setter
+    def keys(self, keys: List[Hashable]):
+        self._keys = list(sorted(keys))
+        self.cache.clear()
+        self.seen_set.clear()
+
+    @profile
     def insert(self, assignment: Dict, output: Any) -> None:
         """
         Insert an output under the given partial assignment.
@@ -219,19 +232,25 @@ class IndexedCache:
         :return: None
         :rtype: None
         """
-        assignment = dict(assignment)
-        self.seen_set.add(assignment)
+        # Make a shallow copy only for seen_set tracking to avoid mutating caller's dict
+        seen_assignment = dict(assignment)
+        self.seen_set.add(seen_assignment)
+
         cache = self.cache
-        for k_idx, k in enumerate(self.keys):
-            if k not in assignment.keys():
-                assignment[k] = All
-                logger.debug(f"Missing key {k} in assignment {assignment}, using {All}")
-            if k_idx < len(self.keys) - 1:
-                if (k, assignment[k]) not in cache:
-                    cache[(k, assignment[k])] = CacheDict()
-                cache = cache[(k, assignment[k])]
+        keys = self.keys
+        last_idx = len(keys) - 1
+
+        # Use local lookups and setdefault to reduce overhead
+        for idx, k in enumerate(keys):
+            v = assignment.get(k, All)
+            if idx < last_idx:
+                next_cache = cache.get(v)
+                if next_cache is None:
+                    next_cache = CacheDict()
+                    cache[v] = next_cache
+                cache = next_cache
             else:
-                cache[(k, assignment[k])] = output
+                cache[v] = output
 
     def check(self, assignment: Dict) -> bool:
         """
@@ -245,6 +264,7 @@ class IndexedCache:
         #     self.seen_set.add(assignment)
         return seen
 
+    @profile
     def retrieve(self, assignment, cache=None, key_idx=0, result: Dict = None) -> Iterable:
         """
         Retrieve leaf results matching a (possibly partial) assignment.
@@ -258,35 +278,50 @@ class IndexedCache:
         :return: Generator of (assignment, value) pairs.
         :rtype: Iterable
         """
-        result = result or copy(assignment)
+        # Initialize result only once; avoid repeated copying where possible
+        if result is None:
+            result = copy(assignment)
         if cache is None:
             cache = self.cache
             self.enter_count += 1
-        if isinstance(cache, CacheDict) and len(cache) == 0:
+        # Fast return on empty cache node
+        if isinstance(cache, CacheDict) and not cache:
             return
-        key = self.keys[key_idx]
+        keys = self.keys
+        n_keys = len(keys)
+        key = keys[key_idx]
+
+        # Follow the concrete chain as far as it exists without exceptions
         while key in assignment:
-            try:
-                cache = cache[(key, assignment[key])]
-            except KeyError:
-                for cache_key, cache_val in cache.items():
-                    if isinstance(cache_key[1], ALL):
-                        yield from self._yield_result(assignment, cache_val, key_idx, result)
-                    else:
-                        self.search_count += 1
+            next_cache = cache.get(assignment[key])
+            if next_cache is None:
+                # Try wildcard branch at this level
+                wildcard = cache.get(All)
+                if wildcard is not None:
+                    yield from self._yield_result(assignment, wildcard, key_idx, result)
+                else:
+                    self.search_count += 1
                 return
-            if key_idx+1 < len(self.keys):
-                key_idx = key_idx + 1
-                key = self.keys[key_idx]
+            cache = next_cache
+            if key_idx + 1 < n_keys:
+                key_idx += 1
+                key = keys[key_idx]
             else:
                 break
+
         if key not in assignment:
-            for cache_key, cache_val in cache.items():
-                if not isinstance(cache_key[1], ALL):
-                    result = copy(result)
-                    result[key] = cache_key[1]
-                yield from self._yield_result(assignment, cache_val, key_idx, result)
+            # Prefer wildcard branch if available
+            wildcard = cache.get(All)
+            if wildcard is not None:
+                yield from self._yield_result(assignment, wildcard, key_idx, result)
+            else:
+                # Explore all branches at this level, copying only the minimal delta
+                for cache_key, cache_val in cache.items():
+                    local_result = copy(result)
+                    local_result[key] = cache_key
+                    yield from self._yield_result(assignment, cache_val, key_idx, local_result)
         else:
+            # Reached the leaf (value or next dict) specifically specified by assignment
             yield result, cache
 
     def clear(self):

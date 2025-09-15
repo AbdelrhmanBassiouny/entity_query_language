@@ -1,4 +1,3 @@
-from examples.intro_example import prismatic_connection
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
 from entity_query_language import let, an, entity, and_, symbolic_mode
@@ -10,11 +9,11 @@ from entity_query_language.cache_data import cache_enter_count, cache_search_cou
 
 
 def test_generate_drawers(handles_and_containers_world):
-    world = let("world", type_=World, domain=handles_and_containers_world)
-    container = let("container", type_=Container, domain=world.bodies)
-    handle = let("handle", type_=Handle, domain=world.bodies)
-    fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
+    world = let(type_=World, domain=handles_and_containers_world)
+    container = let(type_=Container, domain=world.bodies)
+    handle = let(type_=Handle, domain=world.bodies)
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
     with rule_mode():
         solutions = an(entity(Drawer(handle=handle, container=container),
                               and_(container == fixed_connection.parent,

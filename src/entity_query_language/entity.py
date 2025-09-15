@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from functools import wraps
-from typing import Tuple, List
-
 """
 User interface (grammar & vocabulary) for entity query language.
 """
 import operator
 
-from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, dataclass_transform, Callable
+from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tuple, List
 
-from .symbolic import SymbolicExpression, Entity, SetOf, The, An, Variable, AND, Comparator, \
-    chained_logic, Source, OR, in_symbolic_mode, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, \
-    HasType, Predicate
-from .utils import is_iterable
+from .symbolic import SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
+    chained_logic, OR, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode
+from .predicate import Predicate
 
 T = TypeVar('T')  # Define type variable "T"
 
