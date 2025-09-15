@@ -9,6 +9,7 @@ from typing import Callable, Optional, Any, dataclass_transform, Type, Tuple
 from line_profiler import profile
 from typing_extensions import ClassVar
 
+from .cache_data import yield_class_values_from_cache
 from .enums import PredicateType, EQLMode
 from .hashed_data import HashedValue
 from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, chained_logic, \
@@ -64,7 +65,7 @@ def symbol(cls):
         # we need to infer new values.
         if not domain and (in_symbolic_mode(EQLMode.Rule) or predicate_type):
             return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type,
-                            _is_cached_=not issubclass(symbolic_cls, Predicate) or symbolic_cls.is_expensive)
+                            _is_indexed_=index_class_cache(symbolic_cls))
         else:
             # In this mode, we either have a domain through the `domain` provided here, or through the cache if
             # the domain is not provided. Then we filter this domain by the provided constraints on the variable
@@ -122,12 +123,14 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
     :param kwargs: The keyword arguments to the class constructor.
     :return: The selected variable and expression.
     """
-    if domain and is_iterable(domain.domain):
+    if not domain and symbolic_cls in Variable._cache_:
+        domain = From((v for a, v in yield_class_values_from_cache(Variable._cache_, symbolic_cls, from_index=False)))
+    elif domain and is_iterable(domain.domain):
         domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
     var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type,
-                   _is_cached_=not issubclass(symbolic_cls, Predicate) or symbolic_cls.is_expensive)
+                   _is_indexed_=index_class_cache(symbolic_cls))
     if domain:
-        conditions = [HasType(var, (symbolic_cls,))]
+        conditions = [] #[HasType(var, (symbolic_cls,))]
     else:
         conditions = []
     if kwargs:
@@ -150,14 +153,24 @@ def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callabl
     """
     instance = original_new(symbolic_cls)
     instance.__init__(*args, **kwargs)
-    if not issubclass(symbolic_cls, Predicate) or symbolic_cls.is_expensive:
+    index = index_class_cache(symbolic_cls)
+    if index:
         if symbolic_cls not in cls_args:
             cls_args[symbolic_cls] = list(inspect.signature(symbolic_cls.__init__).parameters.keys())
         kwargs = {f: HashedValue(getattr(instance, f)) for f in cls_args[symbolic_cls][1:]}
         if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
             Variable._cache_[symbolic_cls].keys = kwargs.keys()
-        Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance))
+    else:
+        kwargs = {}
+    Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance), index=index)
     return instance
+
+def index_class_cache(symbolic_cls: Type) -> bool:
+    """
+    Determine whether the class cache should be indexed.
+    """
+    return False
+    # return issubclass(symbolic_cls, Predicate) and symbolic_cls.is_expensive
 
 
 @symbol

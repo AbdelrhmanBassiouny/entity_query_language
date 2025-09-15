@@ -27,7 +27,7 @@ from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Uni
 from typing_extensions import List, Tuple, Callable
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
-    IndexedCache
+    IndexedCache, get_cache_keys_for_class_, yield_class_values_from_cache
 from .failures import MultipleSolutionFound, NoSolutionFound
 from .utils import IDGenerator, is_iterable, render_tree, generate_combinations
 from .hashed_data import HashedValue, HashedIterable, T
@@ -795,9 +795,9 @@ class Variable(CanBehaveLikeAVariable[T]):
     """
     Whether this variable should be inferred.
     """
-    _is_cached_: bool = field(default=True)
+    _is_indexed_: bool = field(default=True)
     """
-    Whether this variable should use caching.
+    Whether this variable cache is indexed or flat.
     """
     _cache_: ClassVar[Dict[Type, IndexedCache]] = defaultdict(IndexedCache)
     """
@@ -854,8 +854,11 @@ class Variable(CanBehaveLikeAVariable[T]):
             yield sources
         elif self._domain_:
             yield from self
-        elif self._type_:
-            yield from self._instantiate_new_values_or_yield_from_cache_(sources)
+        elif not self._is_inferred_ and not self._predicate_type_:
+            yield from self._yield_from_cache_or_instantiate_new_values_(sources)
+        elif self._child_vars_:
+            for kwargs in self._generate_combinations_for_child_vars_values_(sources):
+                yield from self._yield_from_cache_or_instantiate_new_values_(sources, kwargs)
 
     @profile
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
@@ -879,7 +882,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         kwargs = kwargs or {}
         # Try cache fast-path first when allowed
         retrieved = False
-        if (not self._is_inferred_) and self._is_cached_:
+        if not self._is_inferred_:
             for v in self._search_and_yield_from_cache_(**kwargs):
                 retrieved = True
                 if sources:
@@ -922,26 +925,16 @@ class Variable(CanBehaveLikeAVariable[T]):
     @profile
     def _search_and_yield_from_cache_(self, **kwargs):
         unwrapped_hashed_kwargs = {k: v[self._child_vars_[k]._id_] for k, v in kwargs.items()}
-        if self._type_ not in self._cache_ or not self._cache_[self._type_].keys:
-            self._cache_[self._type_].keys = list(unwrapped_hashed_kwargs.keys())
-        cache_keys = self._cache_keys_for_var_type_
-        for t in cache_keys:
-            for found_kwargs, value in self._cache_[t].retrieve(unwrapped_hashed_kwargs):
-                yield from self._process_output_and_update_values_(value.value, **kwargs)
+        for _, value in yield_class_values_from_cache(self._cache_, self._type_, unwrapped_hashed_kwargs,
+                                                      from_index=self._is_indexed_):
+            yield from self._process_output_and_update_values_(value.value, **kwargs)
 
     @property
     def _cache_keys_for_var_type_(self) -> List[Type]:
         """
         Get the cache keys for the given class which are its subclasses and itself.
         """
-        cache_keys = [self._type_]
-        if isinstance(self._type_, type):
-            for t in self._cache_.keys():
-                if t is self._type_:
-                    continue
-                if isinstance(t, type) and issubclass(t, self._type_):
-                    cache_keys.append(t)
-        return cache_keys
+        return get_cache_keys_for_class_(self._cache_, self._type_)
 
     @profile
     def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:
@@ -952,16 +945,26 @@ class Variable(CanBehaveLikeAVariable[T]):
         :param kwargs: The keyword arguments of the predicate/variable.
         :return: The results' dictionary.
         """
+        # evaluate the predicate.
         if self._predicate_type_ == PredicateType.SubClassOfPredicate:
             function_output = function_output()
-        if (not self._invert_ and function_output) or (self._invert_ and not function_output):
-            self._is_false_ = False
-        else:
-            self._is_false_ = True
+
+        # Compute truth considering inversion
+        result_truthy = bool(function_output)
+        self._is_false_ = result_truthy if self._invert_ else not result_truthy
+
         if self._yield_when_false_ or not self._is_false_:
-            values = {self._id_: HashedValue(function_output)}
-            for k, v in kwargs.items():
-                values.update(v)
+            hv = function_output if isinstance(function_output, HashedValue) else HashedValue(function_output)
+
+            if not kwargs:
+                yield {self._id_: hv}
+                return
+
+            # kwargs is a mapping from name -> {var_id: HashedValue};
+            # we need a single dict {var_id: HashedValue
+            values = {self._id_: hv}
+            for d in kwargs.values():
+                values.update(d)
             yield values
 
     @property

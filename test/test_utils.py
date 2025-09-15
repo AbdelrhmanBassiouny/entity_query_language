@@ -11,30 +11,30 @@ def test_cache_insert():
     cache.insert({1: 'b', 2: 'a', 3: 'b'}, '1b2a3b')
     cache.insert({1: 'b', 2: 'b', 3: 'a'}, '1b2b3a')
     cache.insert({1: 'b', 2: 'b', 3: 'b'}, '1b2b3b')
-    assert cache.cache == CacheDict({(1, 'a'):
-                                         CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1a2a3a',
-                                                                         (3, 'b'): '1a2a3b'}),
-                                                    (2, 'b'): CacheDict({(3, 'a'): '1a2b3a',
-                                                                         (3, 'b'): '1a2b3b'})}),
-                                     (1, 'b'):
-                                         CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1b2a3a',
-                                                                         (3, 'b'): '1b2a3b'}),
-                                                    (2, 'b'): CacheDict({(3, 'a'): '1b2b3a',
-                                                                         (3, 'b'): '1b2b3b'})})
+    assert cache.cache == CacheDict({'a':
+                                         CacheDict({'a': CacheDict({'a': '1a2a3a',
+                                                                         'b': '1a2a3b'}),
+                                                    'b': CacheDict({'a': '1a2b3a',
+                                                                         'b': '1a2b3b'})}),
+                                     'b':
+                                         CacheDict({'a': CacheDict({'a': '1b2a3a',
+                                                                         'b': '1b2a3b'}),
+                                                    'b': CacheDict({'a': '1b2b3a',
+                                                                         'b': '1b2b3b'})})
                                      })
 
 
 def test_cache_retrieve():
-    data = CacheDict({(1, 'a'):
-                          CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1a2a3a',
-                                                          (3, 'b'): '1a2a3b'}),
-                                     (2, 'b'): CacheDict({(3, 'a'): '1a2b3a',
-                                                          (3, 'b'): '1a2b3b'})}),
-                      (1, 'b'):
-                          CacheDict({(2, 'a'): CacheDict({(3, 'a'): '1b2a3a',
-                                                          (3, 'b'): '1b2a3b'}),
-                                     (2, 'b'): CacheDict({(3, 'a'): '1b2b3a',
-                                                          (3, 'b'): '1b2b3b'})})
+    data = CacheDict({'a':
+                          CacheDict({'a': CacheDict({'a': '1a2a3a',
+                                                          'b': '1a2a3b'}),
+                                     'b': CacheDict({'a': '1a2b3a',
+                                                          'b': '1a2b3b'})}),
+                      'b':
+                          CacheDict({'a': CacheDict({'a': '1b2a3a',
+                                                          'b': '1b2a3b'}),
+                                     'b': CacheDict({'a': '1b2b3a',
+                                                          'b': '1b2b3b'})})
                       })
     assignment = {2: 'a'}
     cache = IndexedCache([1, 2, 3])

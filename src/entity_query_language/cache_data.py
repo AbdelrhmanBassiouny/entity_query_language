@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import typing
 from copy import copy
 from functools import lru_cache, cached_property
 
 from line_profiler import profile
+from typing_extensions import Type
 
 from . import logger
 
@@ -17,7 +19,7 @@ caching layer. It also exposes a runtime switch to enable/disable caching.
 import contextvars
 from collections import defaultdict, UserDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Iterable, Hashable
+from typing import Dict, List, Any, Iterable, Hashable, Optional
 
 
 @dataclass
@@ -171,6 +173,10 @@ class SeenSet:
         """
         if self.all_seen:
             return True
+        if not assignment:
+            self.all_seen = True
+            self.seen.append(assignment)
+            return False
         for constraint in self.seen:
             if all(assignment[k] == v if k in assignment else False for k, v in constraint.items()):
                 return True
@@ -202,6 +208,7 @@ class IndexedCache:
     _keys: List[Hashable] = field(default_factory=list)
     seen_set: SeenSet = field(default_factory=SeenSet, init=False)
     cache: CacheDict = field(default_factory=CacheDict, init=False)
+    flat_cache: typing.Set = field(default_factory=set, init=False)
     enter_count: int = field(default=0, init=False)
     search_count: int = field(default=0, init=False)
 
@@ -219,7 +226,7 @@ class IndexedCache:
         self.seen_set.clear()
 
     @profile
-    def insert(self, assignment: Dict, output: Any) -> None:
+    def insert(self, assignment: Dict, output: Any, index: bool = True) -> None:
         """
         Insert an output under the given partial assignment.
 
@@ -229,10 +236,16 @@ class IndexedCache:
         :type assignment: Dict
         :param output: Cached value to store at the leaf.
         :type output: Any
+        :param index: If True, insert into cache tree; otherwise, store directly in a flat cache.
+        :type index: bool
         :return: None
         :rtype: None
         """
         # Make a shallow copy only for seen_set tracking to avoid mutating caller's dict
+        if not index or not assignment:
+            self.flat_cache.add(output)
+            return
+
         seen_assignment = dict(assignment)
         self.seen_set.add(seen_assignment)
 
@@ -265,7 +278,7 @@ class IndexedCache:
         return seen
 
     @profile
-    def retrieve(self, assignment, cache=None, key_idx=0, result: Dict = None) -> Iterable:
+    def retrieve(self, assignment: Optional[Dict] = None, cache=None, key_idx=0, result: Dict = None, from_index: bool = True) -> Iterable:
         """
         Retrieve leaf results matching a (possibly partial) assignment.
 
@@ -275,9 +288,15 @@ class IndexedCache:
         :param cache: Internal recursion parameter; the current cache node.
         :param key_idx: Internal recursion parameter; current key index position.
         :param result: Internal accumulator for building a full assignment.
+        :param from_index: If True, retrieve from cache tree; otherwise, retrieve directly from flat cache.
         :return: Generator of (assignment, value) pairs.
         :rtype: Iterable
         """
+        if not from_index or not assignment:
+            for v in self.flat_cache:
+                yield {}, v
+            return
+
         # Initialize result only once; avoid repeated copying where possible
         if result is None:
             result = copy(assignment)
@@ -327,6 +346,7 @@ class IndexedCache:
     def clear(self):
         self.cache.clear()
         self.seen_set.clear()
+        self.flat_cache.clear()
 
     def _yield_result(self, assignment: Dict, cache_val: Any, key_idx: int, result: Dict[int, Any]):
         """
@@ -343,3 +363,27 @@ class IndexedCache:
             yield from self.retrieve(assignment, cache_val, key_idx + 1, result)
         else:
             yield result, cache_val
+
+
+def yield_class_values_from_cache(cache: Dict[Type, IndexedCache], clazz: Type,
+                                  assignment: Optional[Dict] = None,
+                                  from_index: bool = True) -> Iterable:
+    if assignment and ((clazz not in cache) or (not cache[clazz].keys)):
+        cache[clazz].keys = list(assignment.keys())
+    cache_keys = get_cache_keys_for_class_(cache, clazz)
+    for t in cache_keys:
+        yield from cache[t].retrieve(assignment, from_index=from_index)
+
+
+def get_cache_keys_for_class_(cache: Dict[Type, IndexedCache], clazz: Type) -> List[Type]:
+    """
+    Get the cache keys for the given class which are its subclasses and itself.
+    """
+    cache_keys = [clazz]
+    if isinstance(clazz, type):
+        for t in cache.keys():
+            if t is clazz:
+                continue
+            if isinstance(t, type) and issubclass(t, clazz):
+                cache_keys.append(t)
+    return cache_keys
