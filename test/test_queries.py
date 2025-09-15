@@ -383,17 +383,17 @@ def test_generate_with_more_than_one_source_optimized(handles_and_containers_wor
         q1 = a(fixed_connection:=FixedConnection(From(world.connections)),
           HasType(fixed_connection.parent, Container),
           HasType(fixed_connection.child, Handle))
-        q2 = a(prismatic_connection:=PrismaticConnection(From(world.connections)))
-        query = a(set_of([q1, q2], prismatic_connection.child == fixed_connection.parent))
+        q2 = a(prismatic_connection:=PrismaticConnection(From(world.connections), child=fixed_connection.parent))
+        query = a(set_of([q1, q2]))
 
-        query._render_tree_()
+    # query._render_tree_()
 
-        all_solutions = list(query.evaluate())
-        assert len(all_solutions) == 2, "Should generate components for two possible drawer."
-        for sol in all_solutions:
-            assert isinstance(sol[fixed_connection].parent, Container)
-            assert isinstance(sol[fixed_connection].child, Handle)
-            assert sol[prismatic_connection].child == sol[fixed_connection].parent
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 2, "Should generate components for two possible drawer."
+    for sol in all_solutions:
+        assert isinstance(sol[fixed_connection].parent, Container)
+        assert isinstance(sol[fixed_connection].child, Handle)
+        assert sol[prismatic_connection].child == sol[fixed_connection].parent
 
 
 def test_sources(handles_and_containers_world):

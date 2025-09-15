@@ -48,7 +48,7 @@ def _set_symbolic_mode(mode: EQLMode):
     _symbolic_mode.set(mode)
 
 
-def in_symbolic_mode(mode: Optional[EQLMode] = None) -> bool:
+def in_symbolic_mode(mode: EQLMode = EQLMode.Query) -> bool:
     """
     Check whether symbolic construction mode is currently active.
 
@@ -579,13 +579,16 @@ class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
     def evaluate(self) -> Iterable[Union[T, Dict[Union[T, SymbolicExpression[T]], T]]]:
-        results = self._evaluate__()
-        yield from map(self._process_result_, results)
+        with symbolic_mode(mode=None):
+            results = self._evaluate__()
+            assert not in_symbolic_mode()
+            yield from map(self._process_result_, results)
         self._reset_cache_()
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         sources = sources or {}
         if self._id_ in sources:
+            self._is_false_ = self._id_expression_map_[self._id_]._is_false_
             yield sources
         else:
             values = self._child_._evaluate__(sources)
