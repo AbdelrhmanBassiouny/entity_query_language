@@ -367,10 +367,12 @@ class IndexedCache:
 
 def yield_class_values_from_cache(cache: Dict[Type, IndexedCache], clazz: Type,
                                   assignment: Optional[Dict] = None,
-                                  from_index: bool = True) -> Iterable:
-    if assignment and ((clazz not in cache) or (not cache[clazz].keys)):
+                                  from_index: bool = True,
+                                  cache_keys: Optional[List] = None) -> Iterable:
+    if from_index and assignment and ((clazz not in cache) or (not cache[clazz].keys)):
         cache[clazz].keys = list(assignment.keys())
-    cache_keys = get_cache_keys_for_class_(cache, clazz)
+    if not cache_keys:
+        cache_keys = get_cache_keys_for_class_(cache, clazz)
     for t in cache_keys:
         yield from cache[t].retrieve(assignment, from_index=from_index)
 
@@ -379,11 +381,9 @@ def get_cache_keys_for_class_(cache: Dict[Type, IndexedCache], clazz: Type) -> L
     """
     Get the cache keys for the given class which are its subclasses and itself.
     """
-    cache_keys = [clazz]
+    cache_keys = []
     if isinstance(clazz, type):
-        for t in cache.keys():
-            if t is clazz:
-                continue
-            if isinstance(t, type) and issubclass(t, clazz):
-                cache_keys.append(t)
+        cache_keys = [t for t in cache.keys() if isinstance(t, type) and issubclass(t, clazz)]
+    elif clazz in cache:
+        cache_keys = [clazz]
     return cache_keys

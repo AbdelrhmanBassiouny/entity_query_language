@@ -872,8 +872,7 @@ class Variable(CanBehaveLikeAVariable[T]):
 
     @profile
     def _generate_combinations_for_child_vars_values_(self, sources: Optional[Dict[int, HashedValue]] = None):
-        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()
-                             if v._id_ in sources}
+        kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         yield from generate_combinations(kwargs_generators)
 
     @profile

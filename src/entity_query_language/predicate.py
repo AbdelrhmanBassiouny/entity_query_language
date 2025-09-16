@@ -9,7 +9,7 @@ from typing import Callable, Optional, Any, dataclass_transform, Type, Tuple
 from line_profiler import profile
 from typing_extensions import ClassVar
 
-from .cache_data import yield_class_values_from_cache
+from .cache_data import yield_class_values_from_cache, get_cache_keys_for_class_
 from .enums import PredicateType, EQLMode
 from .hashed_data import HashedValue
 from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, chained_logic, \
@@ -123,8 +123,10 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
     :param kwargs: The keyword arguments to the class constructor.
     :return: The selected variable and expression.
     """
-    if not domain and symbolic_cls in Variable._cache_:
-        domain = From((v for a, v in yield_class_values_from_cache(Variable._cache_, symbolic_cls, from_index=False)))
+    cache_keys = get_cache_keys_for_class_(Variable._cache_, symbolic_cls)
+    if not domain and cache_keys:
+        domain = From((v for a, v in yield_class_values_from_cache(Variable._cache_, symbolic_cls, from_index=False,
+                                                                   cache_keys=cache_keys)))
     elif domain and is_iterable(domain.domain):
         domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
     var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type,
