@@ -117,13 +117,17 @@ class SymbolicExpression(Generic[T], ABC):
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
         if child is None:
             child = self._child_
-        child_cp = child.__new__(child.__class__)
-        child_cp.__dict__.update(child.__dict__)
-        child_cp._reset_cache_()
-        child_cp._create_node_(child._node_.name + f"_{self._id_}")
-        if child._children_:
-            child_cp._update_children_(*child._children_)
+        child_cp = copy(child)
         return child_cp
+
+    def __copy__(self):
+        cp = self.__new__(self.__class__)
+        cp.__dict__.update(self.__dict__)
+        cp._reset_only_my_cache_()
+        cp._create_node_(self._node_.name + f"_{self._id_}")
+        if self._children_:
+            cp._update_children_(*self._children_)
+        return cp
 
     def _create_node_(self, name: str):
         self._node_ = Node(name)
@@ -131,8 +135,15 @@ class SymbolicExpression(Generic[T], ABC):
 
     def _reset_cache_(self) -> None:
         """
-        Reset the cache of the symbolic expression.
-        This method should be implemented by subclasses.
+        Reset the cache of the symbolic expression and its children.
+        """
+        self._reset_only_my_cache_()
+        for child in self._children_:
+            child._reset_cache_()
+
+    def _reset_only_my_cache_(self) -> None:
+        """
+        Reset only the cache of this symbolic expression.
         """
         self._seen_parent_values_ = {True: SeenSet(), False: SeenSet()}
 
@@ -158,7 +169,10 @@ class SymbolicExpression(Generic[T], ABC):
         self._conclusion_.add(conclusion)
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
-        return HashedIterable()
+        if self._parent_:
+            return self._parent_._required_variables_from_child_(self, when_true=when_true)
+        else:
+            return HashedIterable()
 
     @property
     def _conclusions_of_all_descendants_(self) -> List[Conclusion]:
@@ -265,8 +279,6 @@ class SymbolicExpression(Generic[T], ABC):
         if self._seen_parent_values_[not self._is_false_].check(required_output):
             return True
         else:
-            if self._id_ == 4:
-                pass
             self._seen_parent_values_[not self._is_false_].add(required_output)
             return False
 
@@ -379,57 +391,53 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
     variable.
     """
 
-    @property
-    def _var_id_(self) -> Optional[int]:
-        return self._var_._id_ if self._var_ else None
-
     def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
         if not self._var_:
             return super().__getattr__(name)
         if name.startswith('__') and name.endswith('__'):
             raise AttributeError(f"{self._var_._name_} has no attribute {name}")
-        return Attribute(self._var_, name)
+        return Attribute(self, name)
 
     def __call__(self, *args, **kwargs) -> CanBehaveLikeAVariable[T]:
         if not self._var_:
             return super().__call__(*args, **kwargs)
         else:
-            return Call(self._var_, args, kwargs)
+            return Call(self, args, kwargs)
 
     def __eq__(self, other) -> Comparator:
         if not self._var_:
             return super().__eq__(other)
-        return Comparator(self._var_, other, operator.eq)
+        return Comparator(self, other, operator.eq)
 
     def __contains__(self, item) -> Comparator:
         if not self._var_:
             return super().__contains__(item)
-        return Comparator(item, self._var_, operator.contains)
+        return Comparator(item, self, operator.contains)
 
     def __ne__(self, other) -> Comparator:
         if not self._var_:
             return super().__ne__(other)
-        return Comparator(self._var_, other, operator.ne)
+        return Comparator(self, other, operator.ne)
 
     def __lt__(self, other) -> Comparator:
         if not self._var_:
             return super().__lt__(other)
-        return Comparator(self._var_, other, operator.lt)
+        return Comparator(self, other, operator.lt)
 
     def __le__(self, other) -> Comparator:
         if not self._var_:
             return super().__le__(other)
-        return Comparator(self._var_, other, operator.le)
+        return Comparator(self, other, operator.le)
 
     def __gt__(self, other) -> Comparator:
         if not self._var_:
             return super().__gt__(other)
-        return Comparator(self._var_, other, operator.gt)
+        return Comparator(self, other, operator.gt)
 
     def __ge__(self, other) -> Comparator:
         if not self._var_:
             return super().__ge__(other)
-        return Comparator(self._var_, other, operator.ge)
+        return Comparator(self, other, operator.ge)
 
     def __hash__(self):
         return super().__hash__()
@@ -458,10 +466,6 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         This is the method called by the user to evaluate the full query.
         """
         ...
-
-    def _reset_cache_(self) -> None:
-        super()._reset_cache_()
-        self._child_._reset_cache_()
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if self._parent_:
@@ -499,7 +503,7 @@ class UnificationDict(UserDict):
     """
 
     def __getitem__(self, key: CanBehaveLikeAVariable[T]) -> T:
-        key = key._id_expression_map_[key._var_id_]
+        key = key._id_expression_map_[key._var_._id_]
         return super().__getitem__(key).value
 
 
@@ -628,11 +632,6 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                 if not self._is_duplicate_output_(v):
                     yield v
 
-    def _reset_cache_(self) -> None:
-        super()._reset_cache_()
-        if self._child_:
-            self._child_._reset_cache_()
-
     def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue],
                                     selected_vars: Iterable[CanBehaveLikeAVariable]):
         """
@@ -673,6 +672,11 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     def __repr__(self):
         return self._name_
 
+    def __copy__(self):
+        cp = super().__copy__()
+        cp.selected_variables = [copy(var) for var in cp.selected_variables]
+        return cp
+
 
 @dataclass(eq=False)
 class SetOf(QueryObjectDescriptor[T]):
@@ -712,13 +716,14 @@ class Entity(QueryObjectDescriptor[T]):
     """
     A query over a single variable.
     """
-    selected_variable: Optional[CanBehaveLikeAVariable[T]] = field(default=None, init=False)
 
     def __post_init__(self):
-        if self.selected_variables:
-            self.selected_variable = self.selected_variables[0]
         self._var_ = self.selected_variable
         super().__post_init__()
+
+    @property
+    def selected_variable(self):
+        return self.selected_variables[0] if self.selected_variables else None
 
     @property
     def _name_(self) -> str:
@@ -732,8 +737,8 @@ class Entity(QueryObjectDescriptor[T]):
             if self._yield_when_false_ or not self._is_false_:
                 if self.selected_variable:
                     for var_val in self.selected_variable._evaluate__(sol):
-                        sol.update(var_val)
-                        yield sol
+                        var_val.update(sol)
+                        yield var_val
                 else:
                     yield sol
 
@@ -1151,11 +1156,6 @@ class BinaryOperator(SymbolicExpression, ABC):
         cache = self._cache_ if cache is None else cache
         cache.insert({k: v for k, v in values.items() if k in cache.keys}, output=self._is_false_)
 
-    def _reset_cache_(self) -> None:
-        super()._reset_cache_()
-        self.left._reset_cache_()
-        self.right._reset_cache_()
-
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
@@ -1173,7 +1173,8 @@ class BinaryOperator(SymbolicExpression, ABC):
             required_vars.update(self.right._unique_variables_)
         for conc in self._conclusion_:
             required_vars.update(conc._unique_variables_)
-        required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+        if self._parent_:
+            required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
 
@@ -1251,7 +1252,7 @@ class Comparator(BinaryOperator):
                 res = self.apply_operation(operand_value_map)
                 self._is_false_ = not res
                 if res or self._yield_when_false_:
-                    values = first_value
+                    values = copy(first_value)
                     values.update(second_value)
                     values.update(operand_value_map)
                     self.update_cache(values)
@@ -1411,11 +1412,13 @@ def Not(operand: Any) -> SymbolicExpression:
     elif isinstance(operand, SetOf):
         operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
+        prev_parent = operand._parent_
         operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
         for child in operand.left._descendants_:
             child._yield_when_false_ = False
         operand.left._yield_when_false_ = False
+        prev_parent = operand._parent_
         operand = AND(Not(operand.left), Not(operand.right))
     else:
         operand._invert_ = True
