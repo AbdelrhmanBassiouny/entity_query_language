@@ -8,7 +8,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tuple, List
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
-    chained_logic, OR, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode
+    chained_logic, OR, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable
 from .predicate import Predicate
 
 T = TypeVar('T')  # Define type variable "T"
@@ -54,23 +54,32 @@ def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *pro
     """
     return _an_or_the(The, entity_, *properties, has_type=has_type)
 
+def infer(inferred_variable: T, *conditions: Union[SymbolicExpression, bool, Predicate]) -> SymbolicExpression[T]:
+    return _an_or_the(An, )
 
 def _an_or_the(quantifier: Union[Type[An], Type[The]],
                entity_: Union[SetOf[T], Entity[T], Type[T], None], *properties: Union[SymbolicExpression, bool],
-               has_type: Optional[Type[T]] = None) -> Union[An[T], The[T]]:
+               has_type: Optional[Type[T]] = None,
+               infer: bool = False) -> Union[An[T], The[T]]:
     if isinstance(entity_, type):
         entity_ = entity_()
     elif entity_ is None and has_type:
         entity_ = has_type()
     if isinstance(entity_, (Entity, SetOf)):
-        return quantifier(entity_)
+        q = quantifier(entity_)
     elif isinstance(entity_, CanBehaveLikeAVariable):
-        return quantifier(entity(entity_, *properties))
+        q = quantifier(entity(entity_, *properties))
     elif isinstance(entity_, (list, tuple)):
-        return quantifier(set_of(entity_, *properties))
+        q = quantifier(set_of(entity_, *properties))
     else:
         raise ValueError(f'Invalid entity: {entity_}')
-
+    if infer:
+        if q._var_:
+            q._var_._is_inferred = True
+        elif isinstance(q._child_, SetOf):
+            for v in q._child_.selected_variables:
+                v._var_._is_inferred = True
+    return q
 
 def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate]) -> Entity[T]:
     """
@@ -132,7 +141,8 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
     return selected_variables, expression
 
 
-def let(type_: Type[T], domain: Optional[Any] = None, name: Optional[str] = None) -> T:
+def let(type_: Type[T], domain: Optional[Any] = None, name: Optional[str] = None) \
+        -> Union[T, CanBehaveLikeAVariable[T], Variable[T]]:
     """
     Declare a symbolic variable or source.
 

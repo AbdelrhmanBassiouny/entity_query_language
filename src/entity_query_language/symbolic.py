@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import UserDict, defaultdict
 from contextlib import contextmanager
 from copy import copy
+from typing import Dict, Any
 
 from line_profiler import profile
 
@@ -20,7 +21,7 @@ import operator
 import typing
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import lru_cache, cached_property
 
 from anytree import Node
 from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar, TYPE_CHECKING
@@ -47,7 +48,7 @@ def _set_symbolic_mode(mode: EQLMode):
     _symbolic_mode.set(mode)
 
 
-def in_symbolic_mode(mode: EQLMode = EQLMode.Query) -> bool:
+def in_symbolic_mode(mode: Optional[EQLMode] = None) -> bool:
     """
     Check whether symbolic construction mode is currently active.
 
@@ -807,6 +808,15 @@ class Variable(CanBehaveLikeAVariable[T]):
     """
     A dictionary mapping child variable names to variables, these are from the _kwargs_ dictionary. 
     """
+    _kwargs_expression_: Optional[SymbolicExpression] = field(default=None, init=False)
+    """
+    An expression of the constraints added from the keyword arguments of the variable.
+    """
+    _evaluating_kwargs_expression_: bool = field(default=False, init=False)
+    """
+    A flag indicating that the kwargs expression is currently being evaluated so do not evaluate them again, and instead
+    yield from the domain.
+    """
 
     def __post_init__(self):
         self._validate_inputs_and_fill_missing_ones_()
@@ -853,12 +863,31 @@ class Variable(CanBehaveLikeAVariable[T]):
         if self._id_ in sources:
             yield sources
         elif self._domain_:
-            yield from self
+            if self._kwargs_expression_ and not self._evaluating_kwargs_expression_:
+                # because when kwargs expression exists,
+                # it will constrain the domain further to fit the kwargs provided.
+                yield from self._evaluate_kwargs_expression_(sources)
+            else:
+                # If no kwargs expression, or is currently being evaluated then yield from the domain directly,
+                # if ht kwargs is being evaluated, it will want to take the domain from here and constrain it further.
+                yield from self
         elif not self._is_inferred_ and not self._predicate_type_:
-            yield from self._yield_from_cache_or_instantiate_new_values_(sources)
+            self._update_domain_and_kwargs_expression_()
+            yield from self._evaluate__(sources)
         elif self._child_vars_:
             for kwargs in self._generate_combinations_for_child_vars_values_(sources):
                 yield from self._yield_from_cache_or_instantiate_new_values_(sources, kwargs)
+
+    def _evaluate_kwargs_expression_(self, sources: Optional[Dict[int, HashedValue]] = None):
+        self._evaluating_kwargs_expression_ = True
+        yield from self._kwargs_expression_._evaluate__(sources)
+        self._evaluating_kwargs_expression_ = False
+
+    def _update_domain_and_kwargs_expression_(self):
+        self._domain_source_ = From(self._cache_values_)
+        self._update_domain_(self._domain_source_.domain)
+        if self._kwargs_:
+            self._kwargs_expression_ = properties_to_expression_tree(self, self._child_vars_)
 
     @profile
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
@@ -882,7 +911,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         # Try cache fast-path first when allowed
         retrieved = False
         if not self._is_inferred_ and self._is_indexed_:
-            for v in self._search_and_yield_from_cache_(**kwargs):
+            for v in self._search_and_yield_from_cache_(kwargs):
                 retrieved = True
                 if sources:
                     v.update(sources)
@@ -922,14 +951,21 @@ class Variable(CanBehaveLikeAVariable[T]):
             yield from self._process_output_and_update_values_(instance, **merged_kwargs)
 
     @profile
-    def _search_and_yield_from_cache_(self, **kwargs):
-        unwrapped_hashed_kwargs = {k: v[self._child_vars_[k]._id_] for k, v in kwargs.items()}
+    def _search_and_yield_from_cache_(self, kwargs: Optional[Dict] = None):
+        unwrapped_hashed_kwargs = None
+        if kwargs and self._is_indexed_:
+            unwrapped_hashed_kwargs = {k: v[self._child_vars_[k]._id_] for k, v in kwargs.items()}
         for _, value in yield_class_values_from_cache(self._cache_, self._type_, unwrapped_hashed_kwargs,
                                                       from_index=self._is_indexed_):
             yield from self._process_output_and_update_values_(value.value, **kwargs)
 
     @property
-    def _cache_keys_for_var_type_(self) -> List[Type]:
+    def _cache_values_(self):
+        for _, value in yield_class_values_from_cache(self._cache_, self._type_, from_index=self._is_indexed_):
+            yield value
+
+    @property
+    def _cache_keys_(self) -> List[Type]:
         """
         Get the cache keys for the given class which are its subclasses and itself.
         """
@@ -1434,3 +1470,17 @@ def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQ
         _set_symbolic_mode(prev_mode)
 
 
+def properties_to_expression_tree(var: CanBehaveLikeAVariable, properties: Dict[str, Any]) -> SymbolicExpression:
+    """
+    Convert properties of a variable to a symbolic expression.
+    """
+    with symbolic_mode():
+        conditions = []
+        if properties:
+            conditions.extend([getattr(var, k) == v for k, v in properties.items()])
+        expression = None
+        if len(conditions) == 1:
+            expression = conditions[0]
+        elif len(conditions) > 1:
+            expression = chained_logic(AND, *conditions)
+    return expression

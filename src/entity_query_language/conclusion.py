@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 from abc import ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -9,7 +10,7 @@ from typing_extensions import Any, Optional, List
 
 from .enums import RDREdge
 from .hashed_data import HashedValue
-from .symbolic import SymbolicExpression, T, Variable
+from .symbolic import SymbolicExpression, T, Variable, Attribute
 
 
 @dataclass(eq=False)

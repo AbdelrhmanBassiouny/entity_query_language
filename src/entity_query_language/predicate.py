@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
-from dataclasses import fields, dataclass, field
+from dataclasses import dataclass
 from functools import wraps
+
 from typing_extensions import Callable, Optional, Any, dataclass_transform, Type, Tuple
 
 from line_profiler import profile
@@ -12,8 +13,7 @@ from typing_extensions import ClassVar
 from .cache_data import yield_class_values_from_cache, get_cache_keys_for_class_
 from .enums import PredicateType, EQLMode
 from .hashed_data import HashedValue
-from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, chained_logic, \
-    AND, From
+from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, From, properties_to_expression_tree
 from .utils import is_iterable
 
 
@@ -72,7 +72,7 @@ def symbol(cls):
             # attributes given as keyword arguments.
             var, expression = extract_selected_variable_and_expression(symbolic_cls, domain, predicate_type,
                                                                        **kwargs)
-            return An(Entity(expression, [var]))
+            return An(Entity(expression, [var])) if expression else var
 
     @profile
     def hybrid_new(symbolic_cls, *args, **kwargs):
@@ -113,6 +113,7 @@ def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
             kwargs[arg_name] = arg
     return domain, kwargs
 
+
 @profile
 def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optional[From] = None,
                                              predicate_type: Optional[PredicateType] = None, **kwargs):
@@ -129,20 +130,14 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
                                                                    cache_keys=cache_keys)))
     elif domain and is_iterable(domain.domain):
         domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
+
     var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type,
                    _is_indexed_=index_class_cache(symbolic_cls))
-    if domain:
-        conditions = [] #[HasType(var, (symbolic_cls,))]
-    else:
-        conditions = []
-    if kwargs:
-        conditions.extend([getattr(var, k) == v for k, v in kwargs.items()])
-    expression = None
-    if len(conditions) == 1:
-        expression = conditions[0]
-    elif len(conditions) > 1:
-        expression = chained_logic(AND, *conditions)
+
+    expression = properties_to_expression_tree(var, kwargs)
+
     return var, expression
+
 
 @profile
 def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callable, *args, **kwargs):
