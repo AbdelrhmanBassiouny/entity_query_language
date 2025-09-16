@@ -881,7 +881,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         kwargs = kwargs or {}
         # Try cache fast-path first when allowed
         retrieved = False
-        if not self._is_inferred_:
+        if not self._is_inferred_ and self._is_indexed_:
             for v in self._search_and_yield_from_cache_(**kwargs):
                 retrieved = True
                 if sources:

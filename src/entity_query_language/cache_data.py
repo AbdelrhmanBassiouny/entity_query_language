@@ -292,7 +292,7 @@ class IndexedCache:
         :return: Generator of (assignment, value) pairs.
         :rtype: Iterable
         """
-        if not from_index or not assignment:
+        if not from_index:
             for v in self.flat_cache:
                 yield {}, v
             return

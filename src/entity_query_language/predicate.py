@@ -4,7 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import fields, dataclass, field
 from functools import wraps
-from typing import Callable, Optional, Any, dataclass_transform, Type, Tuple
+from typing_extensions import Callable, Optional, Any, dataclass_transform, Type, Tuple
 
 from line_profiler import profile
 from typing_extensions import ClassVar
