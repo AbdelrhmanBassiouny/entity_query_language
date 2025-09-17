@@ -95,8 +95,8 @@ class SymbolicExpression(Generic[T], ABC):
             node_name = self._name_ + f"_{self._id_}"
             self._create_node_(node_name)
             self._id_expression_map_[self._id_] = self
-            if hasattr(self, "_child_") and self._child_ is not None:
-                self._update_child_()
+        if hasattr(self, "_child_") and self._child_ is not None:
+            self._update_child_()
 
     def _update_child_(self, child: Optional[SymbolicExpression] = None):
         child = child or self._child_
@@ -117,18 +117,20 @@ class SymbolicExpression(Generic[T], ABC):
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
         if child is None:
             child = self._child_
-        child_cp = copy(child)
+        child_cp = child._copy_expression_(child._node_.name + f"_{self._id_}")
         return child_cp
 
-    def __copy__(self):
+    def _copy_expression_(self, new_node_name: str) -> SymbolicExpression:
         cp = self.__new__(self.__class__)
         cp.__dict__.update(self.__dict__)
         cp._reset_only_my_cache_()
-        cp._create_node_(self._node_.name + f"_{self._id_}")
-        if self._children_:
-            cp._update_children_(*self._children_)
+        cp._create_node_(new_node_name)
+        for c in self._children_:
+            c_cp = c._copy_expression_(c._node_.name + f"_{self._id_}")
+            c_cp._node_.parent = cp._node_
         if hasattr(self, "_child_") and self._child_ is not None:
             cp._child_ = [c for c in cp._children_ if c._id_ == self._child_._id_][0]
+        cp.__post_init__()
         return cp
 
     def _create_node_(self, name: str):
@@ -375,14 +377,14 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
             raise AttributeError(f"You are not in symbolic_mode {self.__class__.__name__} object has no attribute"
                                  f" {method_name}")
 
-    def __copy__(self):
-        cp = super().__copy__()
-        if cp._var_:
-            if cp._var_ is self:
-                cp._var_ = cp
-            else:
-                cp._var_ = copy(self._var_)
-        return cp
+    # def __copy__(self):
+    #     cp = super().__copy__()
+    #     if cp._var_:
+    #         if cp._var_ is self:
+    #             cp._var_ = cp
+    #         else:
+    #             cp._var_ = copy(self._var_)
+    #     return cp
 
     def __hash__(self):
         return super().__hash__()
@@ -570,8 +572,6 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = copy(original_v)
                     var_val = {var._id_: sol[var][var._id_] for var in selected_vars}
                     v.update(var_val)
-                    # if self._id_ == 8 and 'Handle1' in var_val[selected_vars[0]._id_].value.child.name:
-                    #     import pdb; pdb.set_trace()
 
                     if not self._is_duplicate_output_(v):
                         yield v
@@ -619,10 +619,10 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     def __repr__(self):
         return self._name_
 
-    def __copy__(self):
-        cp = super().__copy__()
-        cp.selected_variables = [copy(var) if var is not self else cp for var in self.selected_variables]
-        return cp
+    # def __copy__(self):
+    #     cp = super().__copy__()
+    #     cp.selected_variables = [copy(var) if var is not self else cp for var in self.selected_variables]
+    #     return cp
 
 
 @dataclass(eq=False)
@@ -1124,12 +1124,6 @@ class BinaryOperator(SymbolicExpression, ABC):
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
-    def __copy__(self):
-        cp = super().__copy__()
-        cp.left = [c for c in cp._children_ if c._id_ == self.left._id_][0]
-        cp.right = [c for c in cp._children_ if c._id_ == self.right._id_][0]
-        return cp
-
 
 @dataclass(eq=False)
 class Comparator(BinaryOperator):
@@ -1305,16 +1299,19 @@ class OR(LogicalOperator):
         if child is self.left:
             if when_false or (when_false is None):
                 required_vars.update(self.right._unique_variables_)
-                required_vars.update(self._parent_._required_variables_from_child_(self, None))
+                when_iam = None
             else:
-                required_vars.update(self._parent_._required_variables_from_child_(self, True))
+                when_iam = True
+            if self._parent_:
+                required_vars.update(self._parent_._required_variables_from_child_(self, when_iam))
             for conc in self.left._conclusion_:
                 required_vars.update(conc._unique_variables_)
         elif child is self.right:
             if when_true or (when_true is None):
                 for conc in self.right._conclusion_:
                     required_vars.update(conc._unique_variables_)
-            required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+            if self._parent_:
+                required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -1361,17 +1358,15 @@ def Not(operand: Any) -> SymbolicExpression:
                                   f" instead as negating quantifiers is most likely not what you want"
                                   f" as it is ambiguous.")
     elif isinstance(operand, Entity):
-        operand = operand.__class__(Not(operand._child_), operand.selected_variable)
+        operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, SetOf):
         operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
-        prev_parent = operand._parent_
         operand = OR(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
         for child in operand.left._descendants_:
             child._yield_when_false_ = False
         operand.left._yield_when_false_ = False
-        prev_parent = operand._parent_
         operand = AND(Not(operand.left), Not(operand.right))
     else:
         operand._invert_ = True
