@@ -129,7 +129,7 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
         domain = From((v for a, v in yield_class_values_from_cache(Variable._cache_, symbolic_cls, from_index=False,
                                                                    cache_keys=cache_keys)))
     elif domain and is_iterable(domain.domain):
-        domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
+            domain.domain = filter(lambda v: isinstance(v, symbolic_cls), domain.domain)
 
     var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type,
                    _is_indexed_=index_class_cache(symbolic_cls))

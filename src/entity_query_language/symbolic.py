@@ -108,7 +108,7 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Variable._from_domain_([v])
         for k, v in children.items():
-            if (v._node_.parent is not None and isinstance(v, CanBehaveLikeAVariable)
+            if (v._node_.parent is not None
                     and v._node_.parent is not self._node_):
                 children[k] = self._copy_child_expression_(v)
             children[k]._node_.parent = self._node_
@@ -127,6 +127,8 @@ class SymbolicExpression(Generic[T], ABC):
         cp._create_node_(self._node_.name + f"_{self._id_}")
         if self._children_:
             cp._update_children_(*self._children_)
+        if hasattr(self, "_child_") and self._child_ is not None:
+            cp._child_ = [c for c in cp._children_ if c._id_ == self._child_._id_][0]
         return cp
 
     def _create_node_(self, name: str):
@@ -248,7 +250,7 @@ class SymbolicExpression(Generic[T], ABC):
     def _sources_(self):
         vars = [v._expression_ for v in self._node_.leaves]
         while any(isinstance(v, SymbolicExpression) for v in vars):
-            vars = {v._domain_source_.domain for v in vars if isinstance(v, SymbolicExpression) and v._domain_source_}
+            vars = {v._domain_source_.domain if isinstance(v, Variable) and v._domain_source_  else v for v in vars}
             vars = {v._parent_variable_ if isinstance(v, SymbolicExpression) else v for v in vars}
         sources = set(HashedIterable(vars))
         return sources
@@ -304,76 +306,14 @@ class SymbolicExpression(Generic[T], ABC):
     def __hash__(self):
         return hash(id(self))
 
-
-@dataclass(eq=False)
-class Source(SymbolicExpression[T]):
-    """
-    Leaf expression that wraps a concrete Python iterable or value as a domain
-    source for variables.
-
-    :ivar _name__: Source name used in visualization and in id construction.
-    :ivar _value_: Backing value or iterable.
-    """
-    _name__: str
-    _value_: T
-    _child_: Optional[SymbolicExpression[T]] = field(init=False)
-
-    def __post_init__(self):
-        if type(self) is Source:
-            self._child_ = None
-        super().__post_init__()
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        return []
-
-    @property
-    def _name_(self) -> str:
-        return self._name__
-
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> T:
-        return self._value_
-
-    def __getattr__(self, name):
-        if name.startswith('__') and name.endswith('__'):
-            raise AttributeError(f"{self._name_} has no attribute {name}")
-        return SourceAttribute(name, getattr(self._value_, name), _child_=self)
-
-    def __call__(self, *args, **kwargs):
-        return SourceCall(self._name_, self._value_(*args, **kwargs), self, args, kwargs)
-
-
-@dataclass(eq=False)
-class SourceAttribute(Source):
-    """
-    Attribute projection on a Source value.
-
-    Created when accessing an attribute of a Source's underlying value.
-    """
-    _child_: Source = field(kw_only=True)
-
-    @property
-    def _name_(self) -> str:
-        return f"{self._child_._name_}.{self._name__}"
-
-
-@dataclass(eq=False)
-class SourceCall(Source):
-    """
-    Call result of invoking a callable Source value.
-
-    Represents ``source(args, kwargs)`` in the expression tree and carries
-    the call arguments for naming/visualization.
-    """
-    _child_: Source
-    _args_: Tuple[Any, ...] = field(default_factory=tuple)
-    _kwargs_: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def _name_(self) -> str:
-        return (f"{self._child_._name_}({', '.join(map(str, self._args_))},"
-                f" {', '.join(f'{k}={v}' for k, v in self._kwargs_.items())})")
+    def __repr__(self):
+        try:
+            return self._name_
+        except Exception:
+            # Fallback safe repr that doesn't traverse recursive fields
+            cls = self.__class__.__name__
+            _id = getattr(self, "_id_", None)
+            return f"{cls}#{_id if _id is not None else 'NA'}"
 
 
 @dataclass(eq=False)
@@ -392,52 +332,57 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
     """
 
     def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
-        if not self._var_:
-            return super().__getattr__(name)
-        if name.startswith('__') and name.endswith('__'):
-            raise AttributeError(f"{self._var_._name_} has no attribute {name}")
+        # Prevent debugger/private attribute lookups from being interpreted as symbolic attributes
+        if ((not in_symbolic_mode()) or
+                (name.startswith('__') and name.endswith('__') or (name.startswith('_') and not name.endswith('_')))):
+            raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}")
         return Attribute(self, name)
 
     def __call__(self, *args, **kwargs) -> CanBehaveLikeAVariable[T]:
-        if not self._var_:
-            return super().__call__(*args, **kwargs)
-        else:
-            return Call(self, args, kwargs)
+        self._if_not_in_symbolic_mode_raise_error_('__call__')
+        return Call(self, args, kwargs)
 
     def __eq__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__eq__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__eq__')
         return Comparator(self, other, operator.eq)
 
     def __contains__(self, item) -> Comparator:
-        if not self._var_:
-            return super().__contains__(item)
+        self._if_not_in_symbolic_mode_raise_error_('__contains__')
         return Comparator(item, self, operator.contains)
 
     def __ne__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__ne__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__ne__')
         return Comparator(self, other, operator.ne)
 
     def __lt__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__lt__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__lt__')
         return Comparator(self, other, operator.lt)
 
     def __le__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__le__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__le__')
         return Comparator(self, other, operator.le)
 
     def __gt__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__gt__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__gt__')
         return Comparator(self, other, operator.gt)
 
     def __ge__(self, other) -> Comparator:
-        if not self._var_:
-            return super().__ge__(other)
+        self._if_not_in_symbolic_mode_raise_error_('__ge__')
         return Comparator(self, other, operator.ge)
+
+    def _if_not_in_symbolic_mode_raise_error_(self, method_name: str) -> None:
+        if not in_symbolic_mode():
+            raise AttributeError(f"You are not in symbolic_mode {self.__class__.__name__} object has no attribute"
+                                 f" {method_name}")
+
+    def __copy__(self):
+        cp = super().__copy__()
+        if cp._var_:
+            if cp._var_ is self:
+                cp._var_ = cp
+            else:
+                cp._var_ = copy(self._var_)
+        return cp
 
     def __hash__(self):
         return super().__hash__()
@@ -450,7 +395,6 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
     (e.g., An, The).
     """
     _child_: QueryObjectDescriptor[T]
-    _original_id_: int = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -626,6 +570,9 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = copy(original_v)
                     var_val = {var._id_: sol[var][var._id_] for var in selected_vars}
                     v.update(var_val)
+                    # if self._id_ == 8 and 'Handle1' in var_val[selected_vars[0]._id_].value.child.name:
+                    #     import pdb; pdb.set_trace()
+
                     if not self._is_duplicate_output_(v):
                         yield v
             else:
@@ -674,7 +621,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
 
     def __copy__(self):
         cp = super().__copy__()
-        cp.selected_variables = [copy(var) for var in cp.selected_variables]
+        cp.selected_variables = [copy(var) if var is not self else cp for var in self.selected_variables]
         return cp
 
 
@@ -1176,6 +1123,12 @@ class BinaryOperator(SymbolicExpression, ABC):
         if self._parent_:
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
+
+    def __copy__(self):
+        cp = super().__copy__()
+        cp.left = [c for c in cp._children_ if c._id_ == self.left._id_][0]
+        cp.right = [c for c in cp._children_ if c._id_ == self.right._id_][0]
+        return cp
 
 
 @dataclass(eq=False)
