@@ -33,6 +33,11 @@ class ConclusionSelector(LogicalOperator, ABC):
             self._conclusion_.update(conclusions)
             self.concluded_before[not self._is_false_].add(required_output)
 
+    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
+        cp = super()._copy_expression_(postfix)
+        cp.concluded_before = {True: SeenSet(), False: SeenSet()}
+        return cp
+
 
 @dataclass(eq=False)
 class ExceptIf(ConclusionSelector):

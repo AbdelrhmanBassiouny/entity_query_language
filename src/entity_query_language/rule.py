@@ -42,6 +42,7 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
     if isinstance(current_node._parent_, ElseIf):
         current_node = current_node._parent_
     prev_parent = current_node._parent_
+    current_node._parent_ = None
     new_conditions_root = ElseIf(current_node, new_branch)
     new_branch._node_.weight = RDREdge.Alternative
     new_conditions_root._parent_ = prev_parent

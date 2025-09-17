@@ -1,3 +1,5 @@
+from line_profiler import profile
+
 from entity_query_language import let, an, entity, and_, a
 from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
     cache_lookup_time, cache_update_time
@@ -196,7 +198,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
         with alternative(body == revolute_connection.parent, handle == revolute_connection.child):
             Add(views, Door(handle=handle, body=body))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 4, "Should generate 2 drawers, 1 door and 1 wardrobe."
@@ -213,7 +215,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     assert all_solutions[3].handle.name == "Handle1"
     assert all_solutions[3].container.name == "Container1"
 
-
+@profile
 def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     world = doors_and_drawers_world
     body = let(type_=Body, domain=world.bodies)
@@ -238,7 +240,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
                          container == revolute_connection.parent):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."

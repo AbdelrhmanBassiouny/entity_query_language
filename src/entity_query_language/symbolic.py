@@ -117,20 +117,19 @@ class SymbolicExpression(Generic[T], ABC):
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
         if child is None:
             child = self._child_
-        child_cp = child._copy_expression_(child._node_.name + f"_{self._id_}")
+        child_cp = child._copy_expression_(f"_{self._id_}")
         return child_cp
 
-    def _copy_expression_(self, new_node_name: str) -> SymbolicExpression:
+    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
         cp = self.__new__(self.__class__)
         cp.__dict__.update(self.__dict__)
         cp._reset_only_my_cache_()
-        cp._create_node_(new_node_name)
+        cp._create_node_(f"{self._node_.name}_{postfix}")
         for c in self._children_:
-            c_cp = c._copy_expression_(c._node_.name + f"_{self._id_}")
+            c_cp = c._copy_expression_(postfix)
             c_cp._node_.parent = cp._node_
         if hasattr(self, "_child_") and self._child_ is not None:
             cp._child_ = [c for c in cp._children_ if c._id_ == self._child_._id_][0]
-        cp.__post_init__()
         return cp
 
     def _create_node_(self, name: str):
@@ -377,8 +376,8 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
             raise AttributeError(f"You are not in symbolic_mode {self.__class__.__name__} object has no attribute"
                                  f" {method_name}")
 
-    # def __copy__(self):
-    #     cp = super().__copy__()
+    # def _copy_expression_(self, postfix: str):
+    #     cp = super()._copy_expression_(postfix)
     #     if cp._var_:
     #         if cp._var_ is self:
     #             cp._var_ = cp
@@ -547,10 +546,14 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                 required_vars.update(conc._unique_variables_)
         return required_vars
 
+    @profile
     def _evaluate_(self, selected_vars: Optional[Iterable[CanBehaveLikeAVariable]] = None,
                    sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        self._inform_selected_variables_that_they_should_be_inferred_()
         sources = sources or {}
+        if self._id_ in sources:
+            self._is_false_ = self._id_expression_map_[self._id_]._is_false_
+            yield sources
+        self._inform_selected_variables_that_they_should_be_inferred_()
         if self._child_:
             child_values = self._child_._evaluate__(sources)
         else:
@@ -572,11 +575,10 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = copy(original_v)
                     var_val = {var._id_: sol[var][var._id_] for var in selected_vars}
                     v.update(var_val)
-
-                    if not self._is_duplicate_output_(v):
+                    if (not self._child_) or (not self._is_duplicate_output_(v)):
                         yield v
             else:
-                if not self._is_duplicate_output_(v):
+                if (not self._child_) or (not self._is_duplicate_output_(v)):
                     yield v
 
     def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue],
@@ -805,6 +807,7 @@ class Variable(CanBehaveLikeAVariable[T]):
                     self._child_vars_[k] = Variable._from_domain_(v, name=self._name_ + '.' + k)
             self._update_children_(*self._child_vars_.values())
 
+    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         A variable either is already bound in sources by other constraints (Symbolic Expressions).,
@@ -814,7 +817,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         sources = sources or {}
         if self._id_ in sources:
             yield sources
-        elif self._domain_:
+        elif self._domain_ and not self._is_inferred_:
             if self._kwargs_expression_ and not self._evaluating_kwargs_expression_:
                 # because when kwargs expression exists,
                 # it will constrain the domain further to fit the kwargs provided.
@@ -981,10 +984,16 @@ class Variable(CanBehaveLikeAVariable[T]):
         variables = [self]
         for v in self._child_vars_.values():
             variables.extend(v._all_variable_instances_)
-        # if self._domain_source_:
-        #     if isinstance(self._domain_source_.domain, SymbolicExpression):
-        #         variables.extend(self._domain_source_.domain._all_variable_instances_)
         return variables
+
+    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
+        cp = super()._copy_expression_(postfix)
+        if self._child_vars_:
+            child_var_id_key_map = {v._id_: k for k, v in self._child_vars_.items()}
+            for c in cp._children_:
+                if c._id_ in child_var_id_key_map:
+                    cp._child_vars_[child_var_id_key_map[c._id_]] = c
+        return cp
 
     def __iter__(self):
         for v in self._domain_:
@@ -1124,6 +1133,12 @@ class BinaryOperator(SymbolicExpression, ABC):
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
+    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
+        cp = super()._copy_expression_(postfix)
+        cp.left = [c for c in cp._children_ if c._id_ == self.left._id_][0]
+        cp.right = [c for c in cp._children_ if c._id_ == self.right._id_][0]
+        return cp
+
 
 @dataclass(eq=False)
 class Comparator(BinaryOperator):
@@ -1171,6 +1186,7 @@ class Comparator(BinaryOperator):
     def _name_(self):
         return self.operation.__name__
 
+    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Compares the left and right symbolic variables using the "operation".
@@ -1246,6 +1262,7 @@ class AND(LogicalOperator):
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
 
+    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         # init an empty source if none is provided
         sources = sources or {}
@@ -1314,6 +1331,7 @@ class OR(LogicalOperator):
                 required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
+    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Constrain the symbolic expression based on the indices of the operands.
@@ -1335,10 +1353,8 @@ class OR(LogicalOperator):
                     self._is_false_ = self.right._is_false_
                     output = copy(left_value)
                     output.update(right_value)
-                    if self._is_false_ and not self._yield_when_false_:
-                        continue
-                    if self._is_false_ and self._is_duplicate_output_(output):
-                        continue
+                    # if self._is_false_ and self._is_duplicate_output_(output):
+                    #     continue
                     self.update_cache(right_value, self.right_cache)
                     yield output
             else:
