@@ -4,7 +4,8 @@ from typing import Union
 
 from .hashed_data import T
 from .enums import RDREdge
-from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator
+from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator, Variable, properties_to_expression_tree, \
+    CanBehaveLikeAVariable, ResultQuantifier
 from .conclusion_selector import ExceptIf, ElseIf
 
 
@@ -37,6 +38,17 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
     :param conditions: Conditions to chain with AND and attach as an alternative.
     :returns: The newly created branch node for further chaining.
     """
+    # parsed_conditions = []
+    # for condition in conditions:
+    #     if isinstance(condition, Variable) and condition._child_vars_:
+    #         parsed_conditions.append(properties_to_expression_tree(condition, condition._child_vars_))
+    #     elif isinstance(condition, ResultQuantifier):
+    #         if condition._child_._child_:
+    #             parsed_conditions.append(condition._child_._child_)
+    #         elif condition._var_._child_vars_:
+    #             parsed_conditions.append(properties_to_expression_tree(condition._var_, condition._var_._child_vars_))
+    #     else:
+    #         parsed_conditions.append(condition)
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
     if isinstance(current_node._parent_, ElseIf):

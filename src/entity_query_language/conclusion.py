@@ -37,7 +37,7 @@ class Conclusion(SymbolicExpression[T], ABC):
         current_parent = SymbolicExpression._current_parent_()
         if current_parent is None:
             current_parent = self._conditions_root_
-        self._parent_ = current_parent
+        self._node_.parent = current_parent._node_
         self._parent_._add_conclusion_(self)
 
     @property
@@ -51,6 +51,14 @@ class Conclusion(SymbolicExpression[T], ABC):
         return f"{self.__class__.__name__}({self.var._name_}, {value_str})"
 
     def _reset_cache_(self) -> None:
+        ...
+
+    @property
+    def _yield_when_false_(self) -> bool:
+        return False
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
         ...
 
 

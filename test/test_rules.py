@@ -4,6 +4,7 @@ from entity_query_language import let, an, entity, and_, a
 from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
     cache_lookup_time, cache_update_time
 from entity_query_language.conclusion import Add
+from entity_query_language.entity import infer
 from entity_query_language.rule import refinement, alternative
 from entity_query_language.symbolic import rule_mode, From, symbolic_mode
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
@@ -17,10 +18,10 @@ def test_generate_drawers(handles_and_containers_world):
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
     prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
     with rule_mode():
-        solutions = an(entity(Drawer(handle=handle, container=container),
+        solutions = infer(Drawer(handle=handle, container=container),
                               and_(container == fixed_connection.parent,
                                    handle == fixed_connection.child,
-                                   container == prismatic_connection.child))).evaluate()
+                                   container == prismatic_connection.child)).evaluate()
 
     all_solutions = list(solutions)
 
@@ -215,6 +216,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     assert all_solutions[3].handle.name == "Handle1"
     assert all_solutions[3].container.name == "Container1"
 
+
 @profile
 def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     world = doors_and_drawers_world
@@ -226,10 +228,10 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
 
     with symbolic_mode():
-        query = an(entity(views := let(type_=View),
+        query = infer(views := let(type_=View),
                           body == fixed_connection.parent,
                           handle == fixed_connection.child,
-                          body == prismatic_connection.child))
+                          body == prismatic_connection.child)
 
     with rule_mode(query):
         Add(views, Drawer(handle=handle, container=body))
@@ -257,30 +259,25 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
 
 
 def test_rule_tree_with_multiple_alternatives_predicate_form(doors_and_drawers_world):
-    # world = let("world", type_=World, domain=doors_and_drawers_world)
-    # body = let("body", type_=Body, domain=world.bodies)
-    # container = let("container", type_=Container, domain=world.bodies)
-    # handle = let("handle", type_=Handle, domain=world.bodies)
-    # fixed_connection = let("fixed_connection", type_=FixedConnection, domain=world.connections)
-    # prismatic_connection = let("prismatic_connection", type_=PrismaticConnection, domain=world.connections)
-    # revolute_connection = let("revolute_connection", type_=RevoluteConnection, domain=world.connections)
     world = doors_and_drawers_world
-    with rule_mode():
+    with symbolic_mode():
         body = Body(world=world)
         handle = Handle(world=world)
+        container = Container(world=world)
         fixed_connection = FixedConnection(parent=body, child=handle, world=world)
         prismatic_connection = PrismaticConnection(child=body, world=world)
-        query = an(entity(views := View(), fixed_connection, prismatic_connection))
+        revolute_connection = RevoluteConnection(parent=body, child=handle, world=world)
+        query = infer(views := View(), fixed_connection, prismatic_connection)
 
-        with query:
-            Add(views, Drawer(handle=handle, container=body))
-            with alternative(revolute_connection := RevoluteConnection(parent=body, child=handle, world=world)):
-                Add(views, Door(handle=handle, body=body))
-            container = Container(world=world)
-            with alternative(fixed_connection,
-                             body == revolute_connection.child,
-                             container == revolute_connection.parent):
-                Add(views, Wardrobe(handle=handle, body=body, container=container))
+    with rule_mode(query):
+        Add(views, Drawer(handle=handle, container=body, world=world))
+        with alternative(revolute_connection):
+            Add(views, Door(handle=handle, body=body, world=world))
+        with alternative(fixed_connection,
+                         body == revolute_connection.child,
+                         container == revolute_connection.parent,
+                         revolute_connection.world == world):
+            Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
 
     # query._render_tree_()
 
@@ -294,11 +291,11 @@ def test_rule_tree_with_multiple_alternatives_predicate_form(doors_and_drawers_w
     assert isinstance(all_solutions[0], Door)
     assert all_solutions[0].handle.name == "Handle3"
     assert all_solutions[0].body.name == "Body3"
-    assert isinstance(all_solutions[1], Wardrobe)
-    assert all_solutions[1].handle.name == "Handle4"
-    assert all_solutions[1].container.name == "Container2"
-    assert all_solutions[1].body.name == "Body4"
-    assert isinstance(all_solutions[2], Drawer)
-    assert all_solutions[2].container.name == "Container1"
-    assert all_solutions[2].handle.name == "Handle1"
+    assert isinstance(all_solutions[2], Wardrobe)
+    assert all_solutions[2].handle.name == "Handle4"
+    assert all_solutions[2].container.name == "Container2"
+    assert all_solutions[2].body.name == "Body4"
+    assert isinstance(all_solutions[1], Drawer)
+    assert all_solutions[1].container.name == "Container1"
+    assert all_solutions[1].handle.name == "Handle1"
     # print(f"\nCache Match Percent = {_cache_match_count.values/_cache_search_count.values}")

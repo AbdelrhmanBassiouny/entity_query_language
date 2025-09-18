@@ -296,7 +296,7 @@ class SymbolicExpression(Generic[T], ABC):
 
     def __enter__(self):
         node = self
-        if isinstance(node, (ResultQuantifier, QueryObjectDescriptor)):
+        if (node is self._root_) or (node._parent_ is self._root_):
             node = node._conditions_root_
         SymbolicExpression._symbolic_expression_stack_.append(node)
         return self
@@ -507,13 +507,20 @@ class An(ResultQuantifier[T]):
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         sources = sources or {}
         if self._id_ in sources:
-            self._is_false_ = self._id_expression_map_[self._id_]._is_false_
-            yield sources
+            if self is self._conditions_root_ or isinstance(self._parent_, LogicalOperator):
+                original_me = self._id_expression_map_[self._id_]
+                self._is_false_ = original_me._is_false_
+                if not original_me._is_false_ or self._yield_when_false_:
+                    yield sources
+            else:
+                yield sources
         else:
             values = self._child_._evaluate__(sources)
             for value in values:
                 self._is_false_ = self._child_._is_false_
                 if self._yield_when_false_ or not self._is_false_:
+                    if isinstance(value, int):
+                        pass
                     value.update(sources)
                     if self._var_:
                         value.update({self._id_: value[self._var_._id_]})
@@ -676,7 +683,7 @@ class Entity(QueryObjectDescriptor[T]):
 
     @property
     def _name_(self) -> str:
-        return f"Entity(\"{self.selected_variable._name_ if self.selected_variable else ''}\")"
+        return f"{self.__class__.__name__}(\"{self.selected_variable._name_ if self.selected_variable else ''}\")"
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[T]:
         selected_variables = [self.selected_variable] if self.selected_variable else []
@@ -700,6 +707,15 @@ class Entity(QueryObjectDescriptor[T]):
         if self._child_:
             vars.extend(self._child_._all_variable_instances_)
         return vars
+
+
+@dataclass(eq=False)
+class Infer(An[T]):
+
+    def __post_init__(self):
+        super().__post_init__()
+        for v in self._child_.selected_variables:
+            v._is_inferred_ = True
 
 
 @dataclass
@@ -816,7 +832,13 @@ class Variable(CanBehaveLikeAVariable[T]):
         """
         sources = sources or {}
         if self._id_ in sources:
-            yield sources
+            if self is self._conditions_root_ or isinstance(self._parent_, LogicalOperator):
+                original_me = self._id_expression_map_[self._id_]
+                self._is_false_ = original_me._is_false_
+                if not original_me._is_false_ or self._yield_when_false_:
+                    yield sources
+            else:
+                yield sources
         elif self._domain_ and not self._is_inferred_:
             if self._kwargs_expression_ and not self._evaluating_kwargs_expression_:
                 # because when kwargs expression exists,
@@ -835,7 +857,13 @@ class Variable(CanBehaveLikeAVariable[T]):
 
     def _evaluate_kwargs_expression_(self, sources: Optional[Dict[int, HashedValue]] = None):
         self._evaluating_kwargs_expression_ = True
-        yield from self._kwargs_expression_._evaluate__(sources)
+        for v in self._kwargs_expression_._evaluate__(sources):
+            if self is self._conditions_root_ or isinstance(self._parent_, LogicalOperator):
+                self._is_false_ = self._kwargs_expression_._is_false_
+                if not self._is_false_ or self._yield_when_false_:
+                    yield v
+            else:
+                yield v
         self._evaluating_kwargs_expression_ = False
 
     def _update_domain_and_kwargs_expression_(self):
@@ -843,6 +871,8 @@ class Variable(CanBehaveLikeAVariable[T]):
         self._update_domain_(self._domain_source_.domain)
         if self._kwargs_:
             self._kwargs_expression_ = properties_to_expression_tree(self, self._child_vars_)
+            self._kwargs_expression_._node_.parent = self._node_
+            self._kwargs_expression_._yield_when_false_ = self._yield_when_false_
 
     @profile
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
@@ -1090,6 +1120,7 @@ class BinaryOperator(SymbolicExpression, ABC):
         super().__post_init__()
         self.left, self.right = self._update_children_(self.left, self.right)
         self._cache_.keys = list(self.left._unique_variables_.union(self.right._unique_variables_).values.keys())
+        self._yield_when_false_ = False
 
     def yield_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None):
         cache = self._cache_ if cache is None else cache
@@ -1150,6 +1181,11 @@ class Comparator(BinaryOperator):
     operation: Callable[[Any, Any], bool]
     _invert__: bool = field(init=False, default=False)
 
+    def __post_init__(self):
+        super().__post_init__()
+        self.left._yield_when_false_ = False
+        self.right._yield_when_false_ = False
+
     @property
     def _invert_(self):
         return self._invert__
@@ -1185,6 +1221,16 @@ class Comparator(BinaryOperator):
     @property
     def _name_(self):
         return self.operation.__name__
+
+    @property
+    def _yield_when_false_(self) -> bool:
+        return super()._yield_when_false_
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+        self.left._yield_when_false_ = False
+        self.right._yield_when_false_ = False
 
     @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -1306,6 +1352,20 @@ class OR(LogicalOperator):
     def __post_init__(self):
         super().__post_init__()
         self.left._yield_when_false_ = True
+        self.right._yield_when_false_ = self._yield_when_false_
+
+    @property
+    def _yield_when_false_(self):
+        return super()._yield_when_false_
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+        self.left._yield_when_false_ = True
+        self.right._yield_when_false_ = value
+        for child in self._children_:
+            if child not in [self.left, self.right]:
+                child._yield_when_false_ = value
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
                                         when_true: Optional[bool] = None):
@@ -1353,8 +1413,10 @@ class OR(LogicalOperator):
                     self._is_false_ = self.right._is_false_
                     output = copy(left_value)
                     output.update(right_value)
-                    # if self._is_false_ and self._is_duplicate_output_(output):
-                    #     continue
+                    if self._is_false_ and not self._yield_when_false_:
+                        continue
+                    if self._is_false_ and self._is_duplicate_output_(output):
+                        continue
                     self.update_cache(right_value, self.right_cache)
                     yield output
             else:
