@@ -84,6 +84,13 @@ class ExceptIf(ConclusionSelector):
 
             left_value.update(sources)
 
+            self._is_false_ = self.left._is_false_
+            if self._is_false_:
+                if self._yield_when_false_:
+                    if not self._is_duplicate_output_(left_value):
+                        yield left_value
+                continue
+
             if is_caching_enabled() and self.right_cache.check(left_value):
                 yield from self.yield_from_cache(left_value, self.right_cache)
                 continue
@@ -100,6 +107,16 @@ class ExceptIf(ConclusionSelector):
                 self._conclusion_.update(self.left._conclusion_)
                 yield left_value
                 self._conclusion_.clear()
+
+    @property
+    def _yield_when_false_(self):
+        return super()._yield_when_false_
+
+    @_yield_when_false_.setter
+    def _yield_when_false_(self, value):
+        self._yield_when_false__ = value
+        self.left._yield_when_false_ = value
+        self.right._yield_when_false_ = False
 
 
 @dataclass(eq=False)

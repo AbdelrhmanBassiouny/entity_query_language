@@ -299,3 +299,47 @@ def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(door
     assert all_solutions[1].container.name == "Container1"
     assert all_solutions[1].handle.name == "Handle1"
     # print(f"\nCache Match Percent = {_cache_match_count.values/_cache_search_count.values}")
+
+
+def test_rule_tree_with_multiple_alternatives_predicate_form_better_rule_tree(doors_and_drawers_world):
+    world = doors_and_drawers_world
+    with symbolic_mode():
+        body = Body(world=world)
+        handle = Handle(world=world)
+        container = Container(world=world)
+        fixed_connection = FixedConnection(parent=body, child=handle, world=world)
+        prismatic_connection = PrismaticConnection(child=body, world=world)
+        revolute_connection = RevoluteConnection(world=world)
+        query = infer(views := View(), fixed_connection)
+
+    with rule_mode(query):
+        with refinement(prismatic_connection):
+            Add(views, Drawer(handle=handle, container=body, world=world))
+            with alternative(body == revolute_connection.child,
+                             container == revolute_connection.parent,
+                             revolute_connection.world == world):
+                Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
+        with alternative(revolute_connection.parent == body,
+                         revolute_connection.child == handle):
+            Add(views, Door(handle=handle, body=body, world=world))
+
+    # query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    print(f"\nCache Enter Count = {cache_enter_count.values}")
+    print(f"\nCache Search Count = {cache_search_count.values}")
+    print(f"\nCache Match Count = {cache_match_count.values}")
+    print(f"\nCache LookUp Time = {cache_lookup_time.values}")
+    print(f"\nCache Update Time = {cache_update_time.values}")
+    assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    expected_solution_set = {(Door, "Handle3", "Body3"), (Drawer, "Handle1", "Container1"),
+                             (Wardrobe, "Handle4", "Body4", "Container2")}
+    solution_set = set()
+    for s in all_solutions:
+        if isinstance(s, Door):
+            solution_set.add((Door, s.handle.name, s.body.name))
+        elif isinstance(s, Drawer):
+            solution_set.add((Drawer, s.handle.name, s.container.name))
+        elif isinstance(s, Wardrobe):
+            solution_set.add((Wardrobe, s.handle.name, s.body.name, s.container.name))
+    assert expected_solution_set == solution_set

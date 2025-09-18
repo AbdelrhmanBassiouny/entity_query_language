@@ -6,7 +6,7 @@ from .hashed_data import T
 from .enums import RDREdge
 from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator, Variable, properties_to_expression_tree, \
     CanBehaveLikeAVariable, ResultQuantifier
-from .conclusion_selector import ExceptIf, ElseIf
+from .conclusion_selector import ExceptIf, ElseIf, ConclusionSelector
 
 
 def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpression[T]:
@@ -21,7 +21,9 @@ def refinement(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpre
     :returns: The newly created branch node for further chaining.
     """
     new_branch = chained_logic(AND, *conditions)
-    prev_parent = SymbolicExpression._current_parent_()._parent_
+    current_node = SymbolicExpression._current_parent_()
+    prev_parent = current_node._parent_
+    current_node._parent_ = None
     new_conditions_root = ExceptIf(SymbolicExpression._current_parent_(), new_branch)
     new_branch._node_.weight = RDREdge.Refinement
     new_conditions_root._parent_ = prev_parent
@@ -52,6 +54,8 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool]) -> SymbolicExpr
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
     if isinstance(current_node._parent_, ElseIf):
+        current_node = current_node._parent_
+    elif isinstance(current_node._parent_, ExceptIf) and current_node is current_node._parent_.left:
         current_node = current_node._parent_
     prev_parent = current_node._parent_
     current_node._parent_ = None
