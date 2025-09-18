@@ -258,6 +258,46 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert all_solutions[2].handle.name == "Handle1"
 
 
+@profile
+def test_rule_tree_with_multiple_alternatives_better_rule_tree(doors_and_drawers_world):
+    world = doors_and_drawers_world
+    body = let(type_=Body, domain=world.bodies)
+    container = let(type_=Container, domain=world.bodies)
+    handle = let(type_=Handle, domain=world.bodies)
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    prismatic_connection = let(type_=PrismaticConnection, domain=world.connections)
+    revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
+
+    with symbolic_mode():
+        query = infer(views := let(type_=View),
+                          body == fixed_connection.parent,
+                          handle == fixed_connection.child)
+
+    with rule_mode(query):
+        with refinement(prismatic_connection.child == body):
+            Add(views, Drawer(handle=handle, container=body))
+            with alternative(body == revolute_connection.child,
+                             container == revolute_connection.parent):
+                Add(views, Wardrobe(handle=handle, body=body, container=container))
+        with alternative(revolute_connection.parent == body, revolute_connection.child == handle):
+            Add(views, Door(handle=handle, body=body))
+
+    # query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    assert isinstance(all_solutions[0], Door)
+    assert all_solutions[0].handle.name == "Handle3"
+    assert all_solutions[0].body.name == "Body3"
+    assert isinstance(all_solutions[1], Wardrobe)
+    assert all_solutions[1].handle.name == "Handle4"
+    assert all_solutions[1].container.name == "Container2"
+    assert all_solutions[1].body.name == "Body4"
+    assert isinstance(all_solutions[2], Drawer)
+    assert all_solutions[2].container.name == "Container1"
+    assert all_solutions[2].handle.name == "Handle1"
+
+
 def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(doors_and_drawers_world):
     world = doors_and_drawers_world
     with symbolic_mode():
