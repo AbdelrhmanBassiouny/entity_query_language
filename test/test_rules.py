@@ -258,7 +258,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert all_solutions[2].handle.name == "Handle1"
 
 
-def test_rule_tree_with_multiple_alternatives_predicate_form(doors_and_drawers_world):
+def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(doors_and_drawers_world):
     world = doors_and_drawers_world
     with symbolic_mode():
         body = Body(world=world)

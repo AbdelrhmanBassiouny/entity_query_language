@@ -14,12 +14,12 @@ def handles_and_containers_world() -> World:
 def doors_and_drawers_world() -> World:
     return DoorsAndDrawersWorld().create()
 
-# @pytest.fixture(autouse=True)
-# def cleanup_after_test():
-#     # Setup: runs before each test
-#     yield
-#     # Teardown: runs after each test
-#     for c in Variable._cache_.values():
-#         c.clear()
-#     Variable._cache_.clear()
+@pytest.fixture(autouse=True)
+def cleanup_after_test():
+    # Setup: runs before each test
+    yield
+    # Teardown: runs after each test
+    for c in Variable._cache_.values():
+        c.clear()
+    Variable._cache_.clear()
 
