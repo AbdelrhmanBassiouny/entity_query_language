@@ -1122,7 +1122,8 @@ class BinaryOperator(SymbolicExpression, ABC):
         self._cache_.keys = list(self.left._unique_variables_.union(self.right._unique_variables_).values.keys())
         self._yield_when_false_ = False
 
-    def yield_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None):
+    def yield_final_output_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None)\
+            -> Iterable[Dict[int, HashedValue]]:
         cache = self._cache_ if cache is None else cache
         entered = False
         for output, is_false in cache.retrieve(variables_sources):
@@ -1132,6 +1133,17 @@ class BinaryOperator(SymbolicExpression, ABC):
             if is_false and self._is_duplicate_output_(output):
                 continue
             yield output
+        if not entered:
+            cache_match_count.values[self._node_.name] += 1
+        cache_enter_count.values[self._node_.name] = cache.enter_count
+        cache_search_count.values[self._node_.name] = cache.search_count
+
+    def yield_from_cache(self, variables_sources, cache: IndexedCache) -> Iterable[Tuple[Dict[int, HashedValue], bool]]:
+        entered = False
+        for output, is_false in cache.retrieve(variables_sources):
+            entered = True
+            cache_match_count.values[self._node_.name] += 1
+            yield output, is_false
         if not entered:
             cache_match_count.values[self._node_.name] += 1
         cache_enter_count.values[self._node_.name] = cache.enter_count
@@ -1247,7 +1259,7 @@ class Comparator(BinaryOperator):
 
         if is_caching_enabled():
             if self._cache_.check(sources):
-                yield from self.yield_from_cache(sources)
+                yield from self.yield_final_output_from_cache(sources)
                 return
 
         first_operand, second_operand = self.get_first_second_operands(sources)
@@ -1325,7 +1337,7 @@ class AND(LogicalOperator):
                 continue
 
             if is_caching_enabled() and self.right_cache.check(left_value):
-                yield from self.yield_from_cache(left_value, self.right_cache)
+                yield from self.yield_final_output_from_cache(left_value, self.right_cache)
                 continue
 
             # constrain right values by available sources
@@ -1337,6 +1349,66 @@ class AND(LogicalOperator):
                 output = copy(right_value)
                 output.update(left_value)
                 self._is_false_ = self.right._is_false_
+                if self._is_false_ and self._is_duplicate_output_(output):
+                    continue
+                self.update_cache(right_value, self.right_cache)
+                yield output
+
+
+@dataclass(eq=False)
+class OR(LogicalOperator):
+    """
+    A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
+    """
+    left_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.left._yield_when_false_ = self._yield_when_false_
+        self.right._yield_when_false_ = self._yield_when_false_
+
+    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
+                                        when_true: Optional[bool] = None):
+        if not child:
+            child = self.left
+        required_vars = HashedIterable()
+        when_false = not when_true if when_true is not None else None
+        if child is self.left:
+            if when_false or (when_false is None):
+                required_vars.update(self.right._unique_variables_)
+                when_iam = None
+            else:
+                when_iam = True
+            if self._parent_:
+                required_vars.update(self._parent_._required_variables_from_child_(self, when_iam))
+            for conc in self.left._conclusion_:
+                required_vars.update(conc._unique_variables_)
+        elif child is self.right:
+            if when_true or (when_true is None):
+                for conc in self.right._conclusion_:
+                    required_vars.update(conc._unique_variables_)
+            if self._parent_:
+                required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
+        return required_vars
+
+    @profile
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        # init an empty source if none is provided
+        sources = sources or {}
+
+        # constrain left values by available sources
+        left_values = self.left._evaluate__(sources)
+
+        for left_value in left_values:
+            left_value.update(sources)
+
+            right_values = self.right._evaluate__(left_value)
+            # For the found left value, find all right values,
+            # and yield the (left, right) results found.
+            for right_value in right_values:
+                output = copy(right_value)
+                output.update(left_value)
+                self._is_false_ = self.left._is_false_ and self.right._is_false_
                 if self._is_false_ and self._is_duplicate_output_(output):
                     continue
                 self.update_cache(right_value, self.right_cache)
@@ -1363,9 +1435,6 @@ class OR(LogicalOperator):
         self._yield_when_false__ = value
         self.left._yield_when_false_ = True
         self.right._yield_when_false_ = value
-        for child in self._children_:
-            if child not in [self.left, self.right]:
-                child._yield_when_false_ = value
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
                                         when_true: Optional[bool] = None):
@@ -1406,7 +1475,7 @@ class OR(LogicalOperator):
             left_value.update(sources)
             if self.left._is_false_:
                 if is_caching_enabled() and self.right_cache.check(left_value):
-                    yield from self.yield_from_cache(left_value, self.right_cache)
+                    yield from self.yield_final_output_from_cache(left_value, self.right_cache)
                     continue
                 right_values = self.right._evaluate__(left_value)
                 for right_value in right_values:

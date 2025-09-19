@@ -190,8 +190,13 @@ class Predicate(ABC):
 @dataclass(eq=False)
 class HasType(Predicate):
     variable: Any
-    types_: Tuple[Type, ...]
+    types_: Type
     is_expensive: ClassVar[bool] = False
 
     def __call__(self) -> bool:
         return isinstance(self.variable, self.types_)
+
+
+@dataclass(eq=False)
+class HasTypes(HasType):
+    types_: Tuple[Type, ...]

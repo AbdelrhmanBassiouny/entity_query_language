@@ -15,7 +15,7 @@ T = TypeVar('T')  # Define type variable "T"
 
 
 def an(entity_: Optional[Union[SetOf[T], Entity[T], T, Iterable[T], Type[T]]] = None,
-       *properties: Union[SymbolicExpression, bool],
+       *properties: Union[SymbolicExpression, bool, Predicate],
        has_type: Optional[Type[T]] = None) -> Union[An[T], T, SymbolicExpression[T]]:
     """
     Select a single element satisfying the given entity description.
@@ -38,7 +38,8 @@ This is an alias to accommodate for words not starting with vowels.
 """
 
 
-def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *properties: Union[SymbolicExpression, bool]
+def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None],
+        *properties: Union[SymbolicExpression, bool, Predicate]
         , has_type: Optional[Type[T]] = None) -> The[T]:
     """
     Select the unique element satisfying the given entity description.
@@ -56,14 +57,14 @@ def the(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None], *pro
 
 
 def infer(entity_: Union[SetOf[T], Entity[T], T, Iterable[T], Type[T], None],
-          *properties: Union[SymbolicExpression, bool]
+          *properties: Union[SymbolicExpression, bool, Predicate]
           , has_type: Optional[Type[T]] = None) -> Infer[T]:
     return select_one_or_select_many_or_infer(Infer, entity_, *properties, has_type=has_type)
 
 
 def select_one_or_select_many_or_infer(quantifier: Union[Type[An], Type[The], Type[Infer]],
                                        entity_: Union[SetOf[T], Entity[T], Type[T], None],
-                                       *properties: Union[SymbolicExpression, bool],
+                                       *properties: Union[SymbolicExpression, bool, Predicate],
                                        has_type: Optional[Type[T]] = None) -> Union[An[T], The[T], Infer[T]]:
     if isinstance(entity_, type):
         entity_ = entity_()

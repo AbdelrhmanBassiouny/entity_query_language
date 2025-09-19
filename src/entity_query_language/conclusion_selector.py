@@ -92,7 +92,7 @@ class ExceptIf(ConclusionSelector):
                 continue
 
             if is_caching_enabled() and self.right_cache.check(left_value):
-                yield from self.yield_from_cache(left_value, self.right_cache)
+                yield from self.yield_final_output_from_cache(left_value, self.right_cache)
                 continue
 
             right_yielded = False
