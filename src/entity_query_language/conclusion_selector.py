@@ -8,7 +8,7 @@ from typing import Dict, Optional, Iterable
 from .cache_data import SeenSet, is_caching_enabled
 from .conclusion import Conclusion
 from .hashed_data import HashedIterable, HashedValue
-from .symbolic import LogicalOperator, SymbolicExpression, OR
+from .symbolic import LogicalOperator, SymbolicExpression, ElseIf
 
 
 @dataclass(eq=False)
@@ -120,7 +120,7 @@ class ExceptIf(ConclusionSelector):
 
 
 @dataclass(eq=False)
-class ElseIf(OR, ConclusionSelector):
+class Alternative(ElseIf, ConclusionSelector):
     """
     A conditional branch that behaves like an "else if" clause where the left branch
     is selected if it is true, otherwise the right branch is selected if it is true else

@@ -5,7 +5,7 @@ from line_profiler import profile
 
 from entity_query_language import and_, not_, contains, in_, symbolic_mode, From, predicate, symbol, Predicate
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching
-from entity_query_language import an, entity, set_of, let, the, or_, a
+from entity_query_language import an, entity, set_of, let, the, elseif, a
 from entity_query_language.failures import MultipleSolutionFound
 from entity_query_language.predicate import HasType
 from .datasets import Handle, Body, Container, FixedConnection, PrismaticConnection, World, Connection
@@ -256,11 +256,11 @@ def test_generate_with_or_and(handles_and_containers_world):
     def generate_handles_and_container1():
         with symbolic_mode():
             yield from an(entity(body := let(type_=Body, domain=world.bodies),
-                                 or_(and_(contains(body.name, "Handle"),
-                                          contains(body.name, '1'))
-                                     , and_(contains(body.name, 'Container'),
+                                 elseif(and_(contains(body.name, "Handle"),
+                                             contains(body.name, '1'))
+                                        , and_(contains(body.name, 'Container'),
                                             contains(body.name, '1'))
-                                     )
+                                        )
                                  )
                           ).evaluate()
 
@@ -272,11 +272,11 @@ def test_reevaluation_of_or_and_query(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         query = an(entity(body := let(type_=Body, domain=world.bodies),
-                          or_(and_(contains(body.name, "Handle"),
-                                   contains(body.name, '1'))
-                              , and_(contains(body.name, 'Container'),
+                          elseif(and_(contains(body.name, "Handle"),
+                                      contains(body.name, '1'))
+                                 , and_(contains(body.name, 'Container'),
                                      contains(body.name, '1'))
-                              )
+                                 )
                           )
                    )
 
@@ -292,8 +292,8 @@ def test_generate_with_and_or(handles_and_containers_world):
     def generate_handles_and_container1():
         with symbolic_mode():
             query = an(entity(body := let(type_=Body, domain=world.bodies),
-                              or_(contains(body.name, "Handle"), contains(body.name, '1'))
-                              , or_(contains(body.name, 'Container'), contains(body.name, '1'))
+                              elseif(contains(body.name, "Handle"), contains(body.name, '1'))
+                              , elseif(contains(body.name, 'Container'), contains(body.name, '1'))
                               )
                        )
         # query._render_tree_()
@@ -487,11 +487,11 @@ def test_not_and_or(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         query = an(entity(body := let(type_=Body, domain=world.bodies),
-                          not_(or_(and_(contains(body.name, "Handle"),
-                                        contains(body.name, '1'))
-                                   , and_(contains(body.name, 'Container'),
+                          not_(elseif(and_(contains(body.name, "Handle"),
+                                           contains(body.name, '1'))
+                                      , and_(contains(body.name, 'Container'),
                                           contains(body.name, '1'))
-                                   ))
+                                      ))
                           )
                    )
 
@@ -509,10 +509,10 @@ def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         not_handle1_and_not_container1 = an(entity(body := let(type_=Body, domain=world.bodies),
-                                                   not_(and_(or_(body.name.startswith("Handle"),
-                                                                 body.name.endswith('1'))
-                                                             , or_(body.name.startswith('Container'),
-                                                                   body.name.endswith('1'))
+                                                   not_(and_(elseif(body.name.startswith("Handle"),
+                                                                    body.name.endswith('1'))
+                                                             , elseif(body.name.startswith('Container'),
+                                                                      body.name.endswith('1'))
                                                              ))
                                                    )
                                             ).evaluate()
@@ -616,8 +616,8 @@ def test_nested_query_with_or_and(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():
         original_query = an(entity(body := let(type_=Body, domain=world.bodies),
-                                   or_(contains(body.name, "Handle") & contains(body.name, '1'),
-                                       contains(body.name, "Handle") & contains(body.name, '2'))))
+                                   elseif(contains(body.name, "Handle") & contains(body.name, '1'),
+                                          contains(body.name, "Handle") & contains(body.name, '2'))))
 
     original_query_handles = list(original_query.evaluate())
     assert len(original_query_handles) == 2, "Should generate two handles"
@@ -665,8 +665,8 @@ def test_nested_query_with_multi_or(handles_and_containers_world):
 
     with symbolic_mode():
         original_query = an(entity(body := let(type_=Body, domain=world.bodies),
-                                   or_(contains(body.name, "Handle1") | contains(body.name, 'Handle2'),
-                                       contains(body.name, 'Container1'))))
+                                   elseif(contains(body.name, "Handle1") | contains(body.name, 'Handle2'),
+                                          contains(body.name, 'Container1'))))
 
     original_query_handles = list(original_query.evaluate())
     assert len(original_query_handles) == 3, "Should generate 2 handles and 1 container"

@@ -289,7 +289,7 @@ class SymbolicExpression(Generic[T], ABC):
         return AND(self, other)
 
     def __or__(self, other):
-        return OR(self, other)
+        return ElseIf(self, other)
 
     def __invert__(self):
         return Not(self)
@@ -1396,27 +1396,42 @@ class OR(LogicalOperator):
         # init an empty source if none is provided
         sources = sources or {}
 
+        if is_caching_enabled() and self._cache_.check(sources):
+            yield from self.yield_final_output_from_cache(sources)
+            return
+
         # constrain left values by available sources
         left_values = self.left._evaluate__(sources)
 
         for left_value in left_values:
             left_value.update(sources)
+            if self.left._is_false_:
+                if self._yield_when_false_:
+                    yield from self.evaluate_right(left_value)
+                continue
+            self.update_cache(left_value, self._cache_)
+            yield left_value
 
-            right_values = self.right._evaluate__(left_value)
-            # For the found left value, find all right values,
-            # and yield the (left, right) results found.
-            for right_value in right_values:
-                output = copy(right_value)
-                output.update(left_value)
-                self._is_false_ = self.left._is_false_ and self.right._is_false_
-                if self._is_false_ and self._is_duplicate_output_(output):
-                    continue
-                self.update_cache(right_value, self.right_cache)
-                yield output
+        yield from self.evaluate_right(sources)
+
+    def evaluate_right(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        right_values = self.right._evaluate__(sources)
+        # For the found left value, find all right values,
+        # and yield the (left, right) results found.
+        for right_value in right_values:
+            output = copy(right_value)
+            output.update(sources)
+            self._is_false_ = self.left._is_false_ and self.right._is_false_
+            if self._is_false_ and not self._yield_when_false_:
+                continue
+            if self._is_duplicate_output_(output):
+                continue
+            self.update_cache(right_value, self._cache_)
+            yield output
 
 
 @dataclass(eq=False)
-class OR(LogicalOperator):
+class ElseIf(LogicalOperator):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
@@ -1509,8 +1524,8 @@ def Not(operand: Any) -> SymbolicExpression:
     elif isinstance(operand, SetOf):
         operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
-        operand = OR(Not(operand.left), Not(operand.right))
-    elif isinstance(operand, OR):
+        operand = ElseIf(Not(operand.left), Not(operand.right))
+    elif isinstance(operand, ElseIf):
         for child in operand.left._descendants_:
             child._yield_when_false_ = False
         operand.left._yield_when_false_ = False

@@ -8,7 +8,7 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tuple, List
 
 from .symbolic import SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
-    chained_logic, OR, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable, Infer
+    chained_logic, ElseIf, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable, Infer, OR
 from .predicate import Predicate
 
 T = TypeVar('T')  # Define type variable "T"
@@ -178,6 +178,19 @@ def and_(*conditions):
     :rtype: SymbolicExpression
     """
     return chained_logic(AND, *conditions)
+
+
+def elseif(*conditions):
+    """
+    Logical disjunction (with short-circuiting) of conditions, if first value is true yield that and do not evaluate
+    right value, otherwise evaluate right value and if true yield that.
+
+    :param conditions: One or more conditions to combine.
+    :type conditions: SymbolicExpression | bool
+    :return: An ElseIf operator joining the conditions.
+    :rtype: SymbolicExpression
+    """
+    return chained_logic(ElseIf, *conditions)
 
 
 def or_(*conditions):

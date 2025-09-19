@@ -6,7 +6,7 @@ from .hashed_data import T
 from .enums import RDREdge
 from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator, Variable, properties_to_expression_tree, \
     CanBehaveLikeAVariable, ResultQuantifier
-from .conclusion_selector import ExceptIf, ElseIf, ConclusionSelector
+from .conclusion_selector import ExceptIf, Alternative, ConclusionSelector
 
 if TYPE_CHECKING:
     from .predicate import Predicate
@@ -35,23 +35,23 @@ def refinement(*conditions: Union[SymbolicExpression[T], bool, Predicate]) -> Sy
 
 def alternative(*conditions: Union[SymbolicExpression[T], bool, Predicate]) -> SymbolicExpression[T]:
     """
-    Add an alternative branch (logical OR) to the current condition tree.
+    Add an alternative branch (logical ElseIf) to the current condition tree.
 
     Each provided condition is chained with AND, and the resulting branch is
-    connected via OR to the current node, representing an alternative path.
+    connected via ElseIf to the current node, representing an alternative path.
 
     :param conditions: Conditions to chain with AND and attach as an alternative.
     :returns: The newly created branch node for further chaining.
     """
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
-    if isinstance(current_node._parent_, ElseIf):
+    if isinstance(current_node._parent_, Alternative):
         current_node = current_node._parent_
     elif isinstance(current_node._parent_, ExceptIf) and current_node is current_node._parent_.left:
         current_node = current_node._parent_
     prev_parent = current_node._parent_
     current_node._parent_ = None
-    new_conditions_root = ElseIf(current_node, new_branch)
+    new_conditions_root = Alternative(current_node, new_branch)
     new_branch._node_.weight = RDREdge.Alternative
     new_conditions_root._parent_ = prev_parent
     if isinstance(prev_parent, BinaryOperator):
