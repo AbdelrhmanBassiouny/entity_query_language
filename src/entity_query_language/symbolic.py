@@ -377,15 +377,6 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
             raise AttributeError(f"You are not in symbolic_mode {self.__class__.__name__} object has no attribute"
                                  f" {method_name}")
 
-    # def _copy_expression_(self, postfix: str):
-    #     cp = super()._copy_expression_(postfix)
-    #     if cp._var_:
-    #         if cp._var_ is self:
-    #             cp._var_ = cp
-    #         else:
-    #             cp._var_ = copy(self._var_)
-    #     return cp
-
     def __hash__(self):
         return super().__hash__()
 
@@ -1044,13 +1035,16 @@ class Literal(SymbolicExpression[T]):
         if self.name is None:
             self.name = self.type_.__name__
         self.variable = Variable(self.name, self.type_, _domain_source_=From(self.data))
+        self._id_ = self.variable._id_
+        self._node_ = self.variable._node_
+        super().__post_init__()
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         yield from self.variable._evaluate__(sources)
 
     @property
     def _all_variable_instances_(self) -> List[Variable]:
-        return []
+        return [self.variable]
 
     @property
     def _name_(self):
