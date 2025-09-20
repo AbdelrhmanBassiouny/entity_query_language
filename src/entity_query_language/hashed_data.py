@@ -87,6 +87,9 @@ class HashedIterable(Generic[T]):
             func = lambda v: func(v) if v.id_ in ids else v
         return HashedIterable(map(func, self))
 
+    def filter(self, func: Callable[[HashedValue], bool]) -> HashedIterable[T]:
+        return HashedIterable(filter(func, self))
+
     @property
     def unwrapped_values(self) -> List[T]:
         return [v.value for v in self.values.values()]

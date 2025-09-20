@@ -244,16 +244,14 @@ class SymbolicExpression(Generic[T], ABC):
         return None
 
     @property
-    @lru_cache(maxsize=None)
-    def _parent_variable_(self) -> Variable:
-        return self._all_variable_instances_[0] if self._all_variable_instances_ else None
-
-    @property
     def _sources_(self):
         vars = [v._expression_ for v in self._node_.leaves]
         while any(isinstance(v, SymbolicExpression) for v in vars):
-            vars = {v._domain_source_.domain if isinstance(v, Variable) and v._domain_source_  else v for v in vars}
-            vars = {v._parent_variable_ if isinstance(v, SymbolicExpression) else v for v in vars}
+            vars = {v._domain_source_.domain if isinstance(v, Variable) and v._domain_source_ else v for v in vars}
+            for v in copy(vars):
+                if isinstance(v, SymbolicExpression):
+                    vars.remove(v)
+                    vars.update(set(v._all_variable_instances_))
         sources = set(HashedIterable(vars))
         return sources
 
@@ -1020,35 +1018,18 @@ class Variable(CanBehaveLikeAVariable[T]):
 
 
 @dataclass(eq=False)
-class Literal(SymbolicExpression[T]):
-    data: Any
-    type_: Optional[Type] = field(default=None)
-    name: Optional[str] = field(default=None)
-    variable: Optional[Variable] = field(default=None, init=False)
-
-    def __post_init__(self):
-        self._child_ = None
-        if not is_iterable(self.data):
-            self.data = HashedIterable([self.data])
-        if not self.type_:
-            self.type_ = type(next(iter(self.data)))
-        if self.name is None:
-            self.name = self.type_.__name__
-        self.variable = Variable(self.name, self.type_, _domain_source_=From(self.data))
-        self._id_ = self.variable._id_
-        self._node_ = self.variable._node_
-        super().__post_init__()
-
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        yield from self.variable._evaluate__(sources)
-
-    @property
-    def _all_variable_instances_(self) -> List[Variable]:
-        return [self.variable]
-
-    @property
-    def _name_(self):
-        return f"Literal({self.name})"
+class Literal(Variable[T]):
+    """
+    Literals are variables that are not constructed by their type but by their given data.
+    """
+    def __init__(self, data: Any, name: Optional[str] = None, type_: Optional[Type] = None):
+        if not is_iterable(data):
+            data = HashedIterable([data])
+        if not type_:
+            type_ = type(next(iter(data)))
+        if name is None:
+            name = type_.__name__
+        super().__init__(name, type_, _domain_source_=From(data))
 
 
 @dataclass(eq=False)
@@ -1302,7 +1283,7 @@ class Comparator(BinaryOperator):
 
     def get_first_second_operands(self, sources: Dict[int, HashedValue]) -> Tuple[
         SymbolicExpression, SymbolicExpression]:
-        if sources and self.right._parent_variable_._id_ in sources:
+        if sources and any(v.value._var_._id_ in sources for v in self.right._unique_variables_):
             return self.right, self.left
         else:
             return self.left, self.right

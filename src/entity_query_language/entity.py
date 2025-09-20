@@ -8,8 +8,9 @@ import operator
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tuple, List
 
 from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
-    chained_logic, ElseIf, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable, Infer, OR,
-                       Union as EQLUnion)
+                       chained_logic, ElseIf, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode,
+                       Variable, Infer, OR,
+                       Union as EQLUnion, Literal)
 from .predicate import Predicate
 
 T = TypeVar('T')  # Define type variable "T"
@@ -194,7 +195,9 @@ def or_(*conditions):
 
 
 def _optimize_or(left: SymbolicExpression, right: SymbolicExpression) -> OR:
-    if left._unique_variables_ == right._unique_variables_:
+    left_vars = left._unique_variables_.filter(lambda v: not isinstance(v.value, Literal))
+    right_vars = right._unique_variables_.filter(lambda v: not isinstance(v.value, Literal))
+    if left_vars == right_vars:
         return ElseIf(left, right)
     else:
         return EQLUnion(left, right)
