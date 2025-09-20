@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 """
 Utilities for hashing, rendering, and general helpers used by the
 symbolic query engine.
@@ -467,3 +469,22 @@ def render_tree(root: Node, use_dot_exporter: bool = False,
                 de.to_picture(f"{filename}{'.svg'}")
             except FileNotFoundError as e:
                 logger.warning(f"{e}")
+
+
+@dataclass(eq=False)
+class ALL:
+    """
+    Sentinel that compares equal to any other value.
+
+    This is used to signal wildcard matches in hashing/containment logic.
+    """
+    def __eq__(self, other):
+        """Always return True."""
+        return True
+
+    def __hash__(self):
+        """Hash based on object identity to remain unique as a sentinel."""
+        return hash(id(self))
+
+
+All = ALL()

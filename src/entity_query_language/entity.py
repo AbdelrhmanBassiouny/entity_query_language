@@ -7,8 +7,9 @@ import operator
 
 from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tuple, List
 
-from .symbolic import SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
-    chained_logic, ElseIf, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable, Infer, OR
+from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
+    chained_logic, ElseIf, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode, Variable, Infer, OR,
+                       Union as EQLUnion)
 from .predicate import Predicate
 
 T = TypeVar('T')  # Define type variable "T"
@@ -180,19 +181,6 @@ def and_(*conditions):
     return chained_logic(AND, *conditions)
 
 
-def elseif(*conditions):
-    """
-    Logical disjunction (with short-circuiting) of conditions, if first value is true yield that and do not evaluate
-    right value, otherwise evaluate right value and if true yield that.
-
-    :param conditions: One or more conditions to combine.
-    :type conditions: SymbolicExpression | bool
-    :return: An ElseIf operator joining the conditions.
-    :rtype: SymbolicExpression
-    """
-    return chained_logic(ElseIf, *conditions)
-
-
 def or_(*conditions):
     """
     Logical disjunction of conditions.
@@ -202,7 +190,14 @@ def or_(*conditions):
     :return: An OR operator joining the conditions.
     :rtype: SymbolicExpression
     """
-    return chained_logic(OR, *conditions)
+    return chained_logic(_optimize_or, *conditions)
+
+
+def _optimize_or(left: SymbolicExpression, right: SymbolicExpression) -> OR:
+    if left._unique_variables_ == right._unique_variables_:
+        return ElseIf(left, right)
+    else:
+        return EQLUnion(left, right)
 
 
 def not_(operand: SymbolicExpression):

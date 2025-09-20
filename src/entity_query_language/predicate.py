@@ -4,6 +4,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import wraps
+from typing import List
 
 from typing_extensions import Callable, Optional, Any, dataclass_transform, Type, Tuple
 

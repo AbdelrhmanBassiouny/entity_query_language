@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Generic, Optional, Iterable, Dict, Any, Callable, List
+from typing import Generic, Optional, Iterable, Dict, Any, Callable, List, Union
 
 from typing_extensions import TypeVar
 
-from .cache_data import ALL
-from .utils import make_list
+from .utils import make_list, ALL
 
 T = TypeVar("T")
 
@@ -101,6 +100,9 @@ class HashedIterable(Generic[T]):
             return v
         raise ValueError("Tried to get a value from empty iterable")
 
+    def clear(self):
+        self.values.clear()
+
     def __iter__(self):
         """
         Iterate over the hashed values.
@@ -138,7 +140,7 @@ class HashedIterable(Generic[T]):
     def __len__(self) -> int:
         return len(self.values)
 
-    def __getitem__(self, id_: int) -> HashedValue:
+    def __getitem__(self, id_: Any) -> HashedValue:
         """
         Get the HashedValue by its id.
 
@@ -146,6 +148,10 @@ class HashedIterable(Generic[T]):
         :return: The HashedValue with the given id.
         :raises KeyError: If the given id is unknown.
         """
+        if isinstance(id_, HashedValue):
+            id_ = id_.id_
+        elif not isinstance(id_, int):
+            id_ = HashedValue(id_).id_
         try:
             return self.values[id_]
         except KeyError:

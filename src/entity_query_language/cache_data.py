@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import typing
 from copy import copy
-from functools import lru_cache, cached_property
 
 from line_profiler import profile
 from typing_extensions import Type
 
-from . import logger
+from .hashed_data import HashedIterable
+from .utils import All
 
 """
 Cache utilities.
@@ -123,25 +122,6 @@ def cache_profile_report() -> Dict[str, Dict[str, float]]:
     }
 
 
-@dataclass(eq=False)
-class ALL:
-    """
-    Sentinel that compares equal to any other value.
-
-    This is used to signal wildcard matches in hashing/containment logic.
-    """
-    def __eq__(self, other):
-        """Always return True."""
-        return True
-
-    def __hash__(self):
-        """Hash based on object identity to remain unique as a sentinel."""
-        return hash(id(self))
-
-
-All = ALL()
-
-
 @dataclass
 class SeenSet:
     """
@@ -208,7 +188,7 @@ class IndexedCache:
     _keys: List[Hashable] = field(default_factory=list)
     seen_set: SeenSet = field(default_factory=SeenSet, init=False)
     cache: CacheDict = field(default_factory=CacheDict, init=False)
-    flat_cache: typing.Set = field(default_factory=set, init=False)
+    flat_cache: HashedIterable = field(default_factory=HashedIterable, init=False)
     enter_count: int = field(default=0, init=False)
     search_count: int = field(default=0, init=False)
 
@@ -276,6 +256,9 @@ class IndexedCache:
         # if not seen:
         #     self.seen_set.add(assignment)
         return seen
+
+    def __getitem__(self, key: Any):
+        return self.flat_cache[key]
 
     @profile
     def retrieve(self, assignment: Optional[Dict] = None, cache=None, key_idx=0, result: Dict = None, from_index: bool = True) -> Iterable:

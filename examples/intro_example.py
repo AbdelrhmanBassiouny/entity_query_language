@@ -1,4 +1,4 @@
-from entity_query_language import entity, an, let, and_, contains, the, MultipleSolutionFound, elseif, not_, in_, set_of, \
+from entity_query_language import entity, an, let, and_, contains, the, MultipleSolutionFound, or_, not_, in_, set_of, \
     symbolic_mode, symbol
 from dataclasses import dataclass, field
 from typing_extensions import List
@@ -51,8 +51,8 @@ except MultipleSolutionFound:
 
 world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body("Handle2")])
 result = an(entity(body := let(type_=Body, domain=world.bodies),
-                   and_(elseif(body.name.startswith("C"), body.name.endswith("1")),
-                        elseif(body.name.startswith("H"), body.name.endswith("1"))
+                   and_(or_(body.name.startswith("C"), body.name.endswith("1")),
+                        or_(body.name.startswith("H"), body.name.endswith("1"))
                         )
                    )
             ).evaluate()
@@ -62,8 +62,8 @@ assert results[0].name == "Container1" and results[1].name == "Handle1"
 
 
 result = an(entity(body := let(type_=Body, domain=world.bodies),
-                   not_(and_(elseif(body.name.startswith("C"), body.name.endswith("1")),
-                             elseif(body.name.startswith("H"), body.name.endswith("1"))
+                   not_(and_(or_(body.name.startswith("C"), body.name.endswith("1")),
+                             or_(body.name.startswith("H"), body.name.endswith("1"))
                              ))
                    )
             ).evaluate()

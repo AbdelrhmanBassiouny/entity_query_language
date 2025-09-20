@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache, cached_property
 
 from anytree import Node
-from typing_extensions import Iterable, Any, Optional, Type, Dict, ClassVar, Union, Generic, TypeVar, TYPE_CHECKING
+from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
+                               Generic, TypeVar, TYPE_CHECKING)
 from typing_extensions import List, Tuple, Callable
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
@@ -106,7 +107,7 @@ class SymbolicExpression(Generic[T], ABC):
         children: Dict[int, SymbolicExpression] = dict(enumerate(children))
         for k, v in children.items():
             if not isinstance(v, SymbolicExpression):
-                children[k] = Variable._from_domain_([v])
+                children[k] = Literal(v)
         for k, v in children.items():
             if (v._node_.parent is not None
                     and v._node_.parent is not self._node_):
@@ -406,7 +407,7 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         return f"{self.__class__.__name__}()"
 
     @abstractmethod
-    def evaluate(self) -> Union[Iterable[T], T, Iterable[Dict[SymbolicExpression[T], T]]]:
+    def evaluate(self) -> TypingUnion[Iterable[T], T, Iterable[Dict[SymbolicExpression[T], T]]]:
         """
         This is the method called by the user to evaluate the full query.
         """
@@ -431,7 +432,7 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
     def _all_variable_instances_(self) -> List[Variable]:
         return self._child_._all_variable_instances_
 
-    def _process_result_(self, result: Dict[int, HashedValue]) -> Union[T, UnificationDict]:
+    def _process_result_(self, result: Dict[int, HashedValue]) -> TypingUnion[T, UnificationDict]:
         if isinstance(self._child_, Entity):
             return result[self._child_.selected_variable._id_].value
         elif isinstance(self._child_, SetOf):
@@ -466,7 +467,7 @@ class The(ResultQuantifier[T]):
     def _yield_when_false_(self, value):
         self._yield_when_false__ = value
 
-    def evaluate(self) -> Union[Iterable[T], T, UnificationDict]:
+    def evaluate(self) -> TypingUnion[Iterable[T], T, UnificationDict]:
         result = self._evaluate__()
         result = self._process_result_(result)
         self._reset_cache_()
@@ -497,7 +498,7 @@ class The(ResultQuantifier[T]):
 class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
-    def evaluate(self) -> Iterable[Union[T, Dict[Union[T, SymbolicExpression[T]], T]]]:
+    def evaluate(self) -> Iterable[TypingUnion[T, Dict[TypingUnion[T, SymbolicExpression[T]], T]]]:
         with symbolic_mode(mode=None):
             results = self._evaluate__()
             assert not in_symbolic_mode()
@@ -820,7 +821,7 @@ class Variable(CanBehaveLikeAVariable[T]):
                 if isinstance(v, SymbolicExpression):
                     self._child_vars_[k] = v
                 else:
-                    self._child_vars_[k] = Variable._from_domain_(v, name=self._name_ + '.' + k)
+                    self._child_vars_[k] = Literal(v, name=self._name_ + '.' + k)
             self._update_children_(*self._child_vars_.values())
 
     @profile
@@ -997,15 +998,9 @@ class Variable(CanBehaveLikeAVariable[T]):
         if not isinstance(iterable, SymbolicExpression) and not is_iterable(iterable):
             iterable = HashedIterable([iterable])
         if not clazz:
-            if isinstance(iterable, CanBehaveLikeAVariable):
-                clazz = iterable._var_._type_
-            else:
-                clazz = type(next(iter(iterable)))
+            clazz = type(next(iter(iterable)))
         if name is None:
-            if clazz is not None:
-                name = clazz.__name__
-            else:
-                name = "Var"
+            name = clazz.__name__
         return Variable(name, clazz, _domain_source_=From(iterable))
 
     @property
@@ -1031,6 +1026,35 @@ class Variable(CanBehaveLikeAVariable[T]):
 
     def __repr__(self):
         return self._name_
+
+
+@dataclass(eq=False)
+class Literal(SymbolicExpression[T]):
+    data: Any
+    type_: Optional[Type] = field(default=None)
+    name: Optional[str] = field(default=None)
+    variable: Optional[Variable] = field(default=None, init=False)
+
+    def __post_init__(self):
+        self._child_ = None
+        if not is_iterable(self.data):
+            self.data = HashedIterable([self.data])
+        if not self.type_:
+            self.type_ = type(next(iter(self.data)))
+        if self.name is None:
+            self.name = self.type_.__name__
+        self.variable = Variable(self.name, self.type_, _domain_source_=From(self.data))
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        yield from self.variable._evaluate__(sources)
+
+    @property
+    def _all_variable_instances_(self) -> List[Variable]:
+        return []
+
+    @property
+    def _name_(self):
+        return f"Literal({self.name})"
 
 
 @dataclass(eq=False)
@@ -1356,16 +1380,10 @@ class AND(LogicalOperator):
 
 
 @dataclass(eq=False)
-class OR(LogicalOperator):
+class OR(LogicalOperator, ABC):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
-    left_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.left._yield_when_false_ = self._yield_when_false_
-        self.right._yield_when_false_ = self._yield_when_false_
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
                                         when_true: Optional[bool] = None):
@@ -1390,6 +1408,16 @@ class OR(LogicalOperator):
             if self._parent_:
                 required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
+
+
+@dataclass(eq=False)
+class Union(OR):
+    left_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.left._yield_when_false_ = self._yield_when_false_
+        self.right._yield_when_false_ = self._yield_when_false_
 
     @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -1429,9 +1457,8 @@ class OR(LogicalOperator):
             self.update_cache(right_value, self._cache_)
             yield output
 
-
 @dataclass(eq=False)
-class ElseIf(LogicalOperator):
+class ElseIf(OR):
     """
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
@@ -1450,30 +1477,6 @@ class ElseIf(LogicalOperator):
         self._yield_when_false__ = value
         self.left._yield_when_false_ = True
         self.right._yield_when_false_ = value
-
-    def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
-                                        when_true: Optional[bool] = None):
-        if not child:
-            child = self.left
-        required_vars = HashedIterable()
-        when_false = not when_true if when_true is not None else None
-        if child is self.left:
-            if when_false or (when_false is None):
-                required_vars.update(self.right._unique_variables_)
-                when_iam = None
-            else:
-                when_iam = True
-            if self._parent_:
-                required_vars.update(self._parent_._required_variables_from_child_(self, when_iam))
-            for conc in self.left._conclusion_:
-                required_vars.update(conc._unique_variables_)
-        elif child is self.right:
-            if when_true or (when_true is None):
-                for conc in self.right._conclusion_:
-                    required_vars.update(conc._unique_variables_)
-            if self._parent_:
-                required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
-        return required_vars
 
     @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -1513,7 +1516,7 @@ def Not(operand: Any) -> SymbolicExpression:
     A symbolic NOT operation that can be used to negate symbolic expressions.
     """
     if not isinstance(operand, SymbolicExpression):
-        operand = Variable._from_domain_(operand)
+        operand = Literal(operand)
     if isinstance(operand, ResultQuantifier):
         raise NotImplementedError(f"Symbolic NOT operations on {ResultQuantifier} operands "
                                   f"are not allowed, you can negate the conditions or {QueryObjectDescriptor}"
@@ -1525,7 +1528,7 @@ def Not(operand: Any) -> SymbolicExpression:
         operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
         operand = ElseIf(Not(operand.left), Not(operand.right))
-    elif isinstance(operand, ElseIf):
+    elif isinstance(operand, OR):
         for child in operand.left._descendants_:
             child._yield_when_false_ = False
         operand.left._yield_when_false_ = False
@@ -1535,7 +1538,9 @@ def Not(operand: Any) -> SymbolicExpression:
     return operand
 
 
-def chained_logic(operator: Type[LogicalOperator], *conditions):
+OperatorOptimizer = Callable[[SymbolicExpression, SymbolicExpression], LogicalOperator]
+
+def chained_logic(operator: TypingUnion[Type[LogicalOperator], OperatorOptimizer], *conditions):
     """
     A chian of logic operation over multiple conditions, e.g. cond1 | cond2 | cond3.
 
