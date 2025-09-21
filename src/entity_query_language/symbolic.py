@@ -3,9 +3,6 @@ from __future__ import annotations
 from collections import UserDict, defaultdict
 from contextlib import contextmanager
 from copy import copy
-from typing import Dict, Any
-
-from line_profiler import profile
 
 from . import logger
 from .enums import EQLMode, PredicateType
@@ -21,7 +18,7 @@ import operator
 import typing
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
-from functools import lru_cache, cached_property
+from functools import lru_cache
 
 from anytree import Node
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
@@ -553,7 +550,6 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                 required_vars.update(conc._unique_variables_)
         return required_vars
 
-    @profile
     def _evaluate_(self, selected_vars: Optional[Iterable[CanBehaveLikeAVariable]] = None,
                    sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         sources = sources or {}
@@ -805,7 +801,6 @@ class Variable(CanBehaveLikeAVariable[T]):
                     self._child_vars_[k] = Literal(v, name=self._name_ + '.' + k)
             self._update_children_(*self._child_vars_.values())
 
-    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         A variable either is already bound in sources by other constraints (Symbolic Expressions).,
@@ -856,7 +851,6 @@ class Variable(CanBehaveLikeAVariable[T]):
             self._kwargs_expression_._node_.parent = self._node_
             self._kwargs_expression_._yield_when_false_ = self._yield_when_false_
 
-    @profile
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
         # Precompute generators only when we have child vars
@@ -866,12 +860,10 @@ class Variable(CanBehaveLikeAVariable[T]):
         else:
             yield from self._yield_from_cache_or_instantiate_new_values_(sources)
 
-    @profile
     def _generate_combinations_for_child_vars_values_(self, sources: Optional[Dict[int, HashedValue]] = None):
         kwargs_generators = {k: v._evaluate__(sources) for k, v in self._child_vars_.items()}
         yield from generate_combinations(kwargs_generators)
 
-    @profile
     def _yield_from_cache_or_instantiate_new_values_(self, sources: Optional[Dict[int, HashedValue]] = None,
                                                      kwargs: Dict[str, Dict[int, HashedValue]] = None):
         kwargs = kwargs or {}
@@ -888,7 +880,6 @@ class Variable(CanBehaveLikeAVariable[T]):
         if (not retrieved) and (self._is_inferred_ or self._predicate_type_):
             yield from self._instantiate_new_values_and_yield_results_(kwargs, sources)
 
-    @profile
     def _instantiate_new_values_and_yield_results_(self, kwargs: Dict[str, Dict[int, HashedValue]],
                                                    sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
@@ -903,7 +894,6 @@ class Variable(CanBehaveLikeAVariable[T]):
             instance = self._type_(**{k: hv.value for k, hv in bound_kwargs.items()})
             yield from self._process_output_and_update_values_(instance, **kwargs)
 
-    @profile
     def _bind_unbound_kwargs_and_yield_results_(self, kwargs: Dict[str, Dict[int, HashedValue]],
                                                 unbound_kwargs: Dict[str, Iterable],
                                                 bound_kwargs: Dict[str, HashedValue]):
@@ -917,7 +907,6 @@ class Variable(CanBehaveLikeAVariable[T]):
             instance = self._type_(**{k: hv.value for k, hv in bound_kwargs.items()})
             yield from self._process_output_and_update_values_(instance, **merged_kwargs)
 
-    @profile
     def _search_and_yield_from_cache_(self, kwargs: Optional[Dict] = None):
         unwrapped_hashed_kwargs = None
         if kwargs and self._is_indexed_:
@@ -938,7 +927,6 @@ class Variable(CanBehaveLikeAVariable[T]):
         """
         return get_cache_keys_for_class_(self._cache_, self._type_)
 
-    @profile
     def _process_output_and_update_values_(self, function_output: Any, **kwargs) -> Iterable[Dict[int, HashedValue]]:
         """
         Process the output of the predicate/variable and get the results.
@@ -1014,6 +1002,7 @@ class Literal(Variable[T]):
     """
     Literals are variables that are not constructed by their type but by their given data.
     """
+
     def __init__(self, data: Any, name: Optional[str] = None, type_: Optional[Type] = None):
         if not is_iterable(data):
             data = HashedIterable([data])
@@ -1129,7 +1118,7 @@ class BinaryOperator(SymbolicExpression, ABC):
         self._cache_.keys = [v.id_ for v in combined_vars.filter(lambda v: not isinstance(v.value, Literal))]
         self._yield_when_false_ = False
 
-    def yield_final_output_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None)\
+    def yield_final_output_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None) \
             -> Iterable[Dict[int, HashedValue]]:
         cache = self._cache_ if cache is None else cache
         entered = False
@@ -1252,7 +1241,6 @@ class Comparator(BinaryOperator):
         self.left._yield_when_false_ = False
         self.right._yield_when_false_ = False
 
-    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Compares the left and right symbolic variables using the "operation".
@@ -1329,7 +1317,6 @@ class AND(LogicalOperator):
     """
     seen_left_values: SeenSet = field(default_factory=SeenSet, init=False)
 
-    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         # init an empty source if none is provided
         sources = sources or {}
@@ -1407,7 +1394,6 @@ class Union(OR):
         self.left._yield_when_false_ = self._yield_when_false_
         self.right._yield_when_false_ = self._yield_when_false_
 
-    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         # init an empty source if none is provided
         sources = sources or {}
@@ -1451,6 +1437,7 @@ class Union(OR):
             self.update_cache(sources, self._cache_)
             yield sources
 
+
 @dataclass(eq=False)
 class ElseIf(OR):
     """
@@ -1472,7 +1459,6 @@ class ElseIf(OR):
         self.left._yield_when_false_ = True
         self.right._yield_when_false_ = value
 
-    @profile
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         """
         Constrain the symbolic expression based on the indices of the operands.
@@ -1534,6 +1520,7 @@ def Not(operand: Any) -> SymbolicExpression:
 
 
 OperatorOptimizer = Callable[[SymbolicExpression, SymbolicExpression], LogicalOperator]
+
 
 def chained_logic(operator: TypingUnion[Type[LogicalOperator], OperatorOptimizer], *conditions):
     """

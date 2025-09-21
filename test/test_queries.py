@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 import pytest
-from line_profiler import profile
+
 
 from entity_query_language import and_, not_, contains, in_, symbolic_mode, From, predicate, symbol, Predicate
 from entity_query_language.cache_data import cache_search_count, cache_match_count, disable_caching

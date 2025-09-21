@@ -8,7 +8,6 @@ from typing import List
 
 from typing_extensions import Callable, Optional, Any, dataclass_transform, Type, Tuple
 
-from line_profiler import profile
 from typing_extensions import ClassVar
 
 from .cache_data import yield_class_values_from_cache, get_cache_keys_for_class_
@@ -60,7 +59,6 @@ def symbol(cls):
     original_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
     symbols_registry.append(cls)
 
-    @profile
     def symbolic_new(symbolic_cls, *args, **kwargs):
         domain, kwargs = update_domain_and_kwargs_from_args(symbolic_cls, *args, **kwargs)
         predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
@@ -78,7 +76,6 @@ def symbol(cls):
                                                                        **kwargs)
             return An(Entity(expression, [var]))
 
-    @profile
     def hybrid_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
             return symbolic_new(symbolic_cls, *args, **kwargs)
@@ -91,7 +88,6 @@ def symbol(cls):
 
 cls_args = {}
 
-@profile
 def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
     """
     Set the domain if provided as the first argument and update the kwargs with the remaining arguments.
@@ -118,7 +114,7 @@ def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
     return domain, kwargs
 
 
-@profile
+
 def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optional[From] = None,
                                              predicate_type: Optional[PredicateType] = None, **kwargs):
     """
@@ -143,7 +139,7 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
     return var, expression
 
 
-@profile
+
 def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callable, *args, **kwargs):
     """
     :param symbolic_cls: The constructed class.

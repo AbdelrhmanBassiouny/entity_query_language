@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import copy
 
-from line_profiler import profile
+
 from typing_extensions import Type
 
 from .hashed_data import HashedIterable
@@ -205,7 +205,7 @@ class IndexedCache:
         self.cache.clear()
         self.seen_set.clear()
 
-    @profile
+    
     def insert(self, assignment: Dict, output: Any, index: bool = True) -> None:
         """
         Insert an output under the given partial assignment.
@@ -260,7 +260,7 @@ class IndexedCache:
     def __getitem__(self, key: Any):
         return self.flat_cache[key]
 
-    @profile
+    
     def retrieve(self, assignment: Optional[Dict] = None, cache=None, key_idx=0, result: Dict = None, from_index: bool = True) -> Iterable:
         """
         Retrieve leaf results matching a (possibly partial) assignment.

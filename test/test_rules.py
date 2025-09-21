@@ -1,4 +1,4 @@
-from line_profiler import profile
+
 
 from entity_query_language import let, an, entity, and_, a
 from entity_query_language.cache_data import cache_enter_count, cache_search_count, cache_match_count, \
@@ -218,7 +218,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     assert all_solutions[3].container.name == "Container1"
 
 
-@profile
+
 def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     world = doors_and_drawers_world
     body = let(type_=Body, domain=world.bodies)
@@ -260,7 +260,7 @@ def test_rule_tree_with_multiple_alternatives(doors_and_drawers_world):
     assert expected_solution_set == solution_set
 
 
-@profile
+
 def test_rule_tree_with_multiple_alternatives_optimized(doors_and_drawers_world):
     world = doors_and_drawers_world
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
@@ -299,7 +299,7 @@ def test_rule_tree_with_multiple_alternatives_optimized(doors_and_drawers_world)
     assert expected_solution_set == solution_set
 
 
-@profile
+
 def test_rule_tree_with_multiple_alternatives_better_rule_tree(doors_and_drawers_world):
     world = doors_and_drawers_world
     body = let(type_=Body, domain=world.bodies)
@@ -340,7 +340,7 @@ def test_rule_tree_with_multiple_alternatives_better_rule_tree(doors_and_drawers
     assert expected_solution_set == solution_set
 
 
-@profile
+
 def test_rule_tree_with_multiple_alternatives_better_rule_tree_optimized(doors_and_drawers_world):
     world = doors_and_drawers_world
     fixed_connection = let(type_=FixedConnection, domain=world.connections)
