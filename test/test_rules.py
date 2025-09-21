@@ -6,7 +6,7 @@ from entity_query_language.cache_data import cache_enter_count, cache_search_cou
 from entity_query_language.conclusion import Add
 from entity_query_language.entity import infer
 from entity_query_language.predicate import HasType
-from entity_query_language.rule import refinement, alternative
+from entity_query_language.rule import refinement, alternative, next_rule
 from entity_query_language.symbolic import rule_mode, From, symbolic_mode
 from .datasets import World, Container, Handle, FixedConnection, PrismaticConnection, Drawer, View, Door, Body, \
     RevoluteConnection, Wardrobe
@@ -358,7 +358,7 @@ def test_rule_tree_with_multiple_alternatives_better_rule_tree_optimized(doors_a
                              HasType(revolute_connection.parent, Container)):
                 Add(views, Wardrobe(handle=fixed_connection.child, body=fixed_connection.parent,
                                     container=revolute_connection.parent))
-        with alternative(HasType(revolute_connection.child, Handle)):
+        with next_rule(HasType(revolute_connection.child, Handle)):
             Add(views, Door(handle=revolute_connection.child, body=revolute_connection.parent))
 
     # query._render_tree_()
@@ -440,9 +440,49 @@ def test_rule_tree_with_multiple_alternatives_predicate_form_better_rule_tree(do
                              container == revolute_connection.parent,
                              revolute_connection.world == world):
                 Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
-        with alternative(revolute_connection.parent == body,
+        with next_rule(revolute_connection.parent == body,
                          revolute_connection.child == handle):
             Add(views, Door(handle=handle, body=body, world=world))
+
+    # query._render_tree_()
+
+    all_solutions = list(query.evaluate())
+    print(f"\nCache Enter Count = {cache_enter_count.values}")
+    print(f"\nCache Search Count = {cache_search_count.values}")
+    print(f"\nCache Match Count = {cache_match_count.values}")
+    print(f"\nCache LookUp Time = {cache_lookup_time.values}")
+    print(f"\nCache Update Time = {cache_update_time.values}")
+    assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."
+    expected_solution_set = {(Door, "Handle3", "Body3"), (Drawer, "Handle1", "Container1"),
+                             (Wardrobe, "Handle4", "Body4", "Container2")}
+    solution_set = set()
+    for s in all_solutions:
+        if isinstance(s, Door):
+            solution_set.add((Door, s.handle.name, s.body.name))
+        elif isinstance(s, Drawer):
+            solution_set.add((Drawer, s.handle.name, s.container.name))
+        elif isinstance(s, Wardrobe):
+            solution_set.add((Wardrobe, s.handle.name, s.body.name, s.container.name))
+    assert expected_solution_set == solution_set
+
+
+def test_rule_tree_with_multiple_alternatives_predicate_form_better_rule_tree_optimized(doors_and_drawers_world):
+    world = doors_and_drawers_world
+    with symbolic_mode():
+        fixed_connection = FixedConnection(world=world)
+        prismatic_connection = PrismaticConnection(world=world)
+        revolute_connection = RevoluteConnection(world=world)
+        query = infer(views := View(), HasType(fixed_connection.child, Handle))
+
+    with rule_mode(query):
+        with refinement(prismatic_connection.child == fixed_connection.parent):
+            Add(views, Drawer(handle=fixed_connection.child, container=fixed_connection.parent, world=world))
+            with alternative(HasType(revolute_connection.parent, Container),
+                             revolute_connection.child==fixed_connection.parent):
+                Add(views, Wardrobe(handle=fixed_connection.child, body=fixed_connection.parent,
+                                    container=revolute_connection.parent, world=world))
+        with next_rule(HasType(revolute_connection.child, Handle)):
+            Add(views, Door(handle=revolute_connection.child, body=revolute_connection.parent, world=world))
 
     # query._render_tree_()
 

@@ -174,9 +174,14 @@ class SymbolicExpression(Generic[T], ABC):
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if self._parent_:
-            return self._parent_._required_variables_from_child_(self, when_true=when_true)
+            vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
         else:
-            return HashedIterable()
+            vars = HashedIterable()
+        if when_true or (when_true is None):
+            for child in self._children_:
+                for conc in child._conclusion_:
+                    vars.update(conc._unique_variables_)
+        return vars
 
     @property
     def _conclusions_of_all_descendants_(self) -> List[Conclusion]:
@@ -278,6 +283,8 @@ class SymbolicExpression(Generic[T], ABC):
         if not required_vars:
             return False
         required_output = {k: v for k, v in output.items() if k in required_vars}
+        if not required_output:
+            return False
         if self._seen_parent_values_[not self._is_false_].check(required_output):
             return True
         else:
@@ -403,17 +410,17 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         ...
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        child = self._child_ if child is None else child
         if self._parent_:
             vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
         else:
             vars = HashedIterable()
-        if isinstance(self._child_, Entity):
-            vars.add(self._child_.selected_variable)
-            vars.update(self._child_.selected_variable._unique_variables_)
-        elif isinstance(self._child_, SetOf):
-            for var in self._child_.selected_variables:
-                vars.add(var)
-                vars.update(var._unique_variables_)
+        for var in child.selected_variables:
+            vars.add(var)
+            vars.update(var._unique_variables_)
+        if when_true or (when_true is None):
+            for conc in child._conclusion_:
+                vars.update(conc._unique_variables_)
         return vars
 
     @property
@@ -509,8 +516,6 @@ class An(ResultQuantifier[T]):
             for value in values:
                 self._is_false_ = self._child_._is_false_
                 if self._yield_when_false_ or not self._is_false_:
-                    if isinstance(value, int):
-                        pass
                     value.update(sources)
                     if self._var_:
                         value.update({self._id_: value[self._var_._id_]})
@@ -534,11 +539,12 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
             self.rule_mode = True
 
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
+        child = self._child_ if not child else child
         required_vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
         required_vars.update(self.selected_variables)
         for var in self.selected_variables:
             required_vars.update(var._unique_variables_)
-        if child:
+        if child and (when_true or (when_true is None)):
             for conc in child._conclusion_:
                 required_vars.update(conc._unique_variables_)
         return required_vars
@@ -605,10 +611,12 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
+        vars = []
+        if self.selected_variables:
+            vars.extend(self.selected_variables)
         if self._child_:
-            return self._child_._all_variable_instances_
-        else:
-            return []
+            vars.extend(self._child_._all_variable_instances_)
+        return vars
 
     def _inform_selected_variables_that_they_should_be_inferred_(self):
         if self.rule_mode and self._child_ and self._child_ is self._conditions_root_:
@@ -646,16 +654,6 @@ class SetOf(QueryObjectDescriptor[T]):
             else:
                 yield sol
 
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        vars = []
-        if self.selected_variables:
-            vars.extend(self.selected_variables)
-        if self._child_:
-            vars.extend(self._child_._all_variable_instances_)
-        return vars
-
 
 @dataclass(eq=False)
 class Entity(QueryObjectDescriptor[T]):
@@ -687,16 +685,6 @@ class Entity(QueryObjectDescriptor[T]):
                         yield var_val
                 else:
                     yield sol
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        vars = []
-        if self.selected_variable:
-            vars.append(self.selected_variable)
-        if self._child_:
-            vars.extend(self._child_._all_variable_instances_)
-        return vars
 
 
 @dataclass(eq=False)
@@ -1118,7 +1106,8 @@ class BinaryOperator(SymbolicExpression, ABC):
     def __post_init__(self):
         super().__post_init__()
         self.left, self.right = self._update_children_(self.left, self.right)
-        self._cache_.keys = list(self.left._unique_variables_.union(self.right._unique_variables_).values.keys())
+        combined_vars = self.left._unique_variables_.union(self.right._unique_variables_)
+        self._cache_.keys = [v.id_ for v in combined_vars.filter(lambda v: not isinstance(v.value, Literal))]
         self._yield_when_false_ = False
 
     def yield_final_output_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None)\
@@ -1169,8 +1158,9 @@ class BinaryOperator(SymbolicExpression, ABC):
         required_vars = HashedIterable()
         if child is self.left:
             required_vars.update(self.right._unique_variables_)
-        for conc in self._conclusion_:
-            required_vars.update(conc._unique_variables_)
+        if when_true or (when_true is None):
+            for conc in self._conclusion_:
+                required_vars.update(conc._unique_variables_)
         if self._parent_:
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
@@ -1305,7 +1295,8 @@ class LogicalOperator(BinaryOperator, ABC):
 
     def __post_init__(self):
         super().__post_init__()
-        self.right_cache.keys = [v.id_ for v in self.right._unique_variables_]
+        right_vars = self.right._unique_variables_.filter(lambda v: not isinstance(v, Literal))
+        self.right_cache.keys = [v.id_ for v in right_vars]
 
     @property
     def _name_(self):
@@ -1374,8 +1365,9 @@ class OR(LogicalOperator, ABC):
                 when_iam = True
             if self._parent_:
                 required_vars.update(self._parent_._required_variables_from_child_(self, when_iam))
-            for conc in self.left._conclusion_:
-                required_vars.update(conc._unique_variables_)
+            if when_true or (when_true is None):
+                for conc in self.left._conclusion_:
+                    required_vars.update(conc._unique_variables_)
         elif child is self.right:
             if when_true or (when_true is None):
                 for conc in self.right._conclusion_:
@@ -1388,6 +1380,8 @@ class OR(LogicalOperator, ABC):
 @dataclass(eq=False)
 class Union(OR):
     left_cache: IndexedCache = field(default_factory=IndexedCache, init=False)
+    left_evaluated: bool = field(default=False, init=False)
+    right_evaluated: bool = field(default=False, init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -1407,30 +1401,36 @@ class Union(OR):
         left_values = self.left._evaluate__(sources)
 
         for left_value in left_values:
-            left_value.update(sources)
+            output = copy(sources)
+            output.update(left_value)
+            self.left_evaluated = True
             if self.left._is_false_:
                 if self._yield_when_false_:
-                    yield from self.evaluate_right(left_value)
+                    yield from self.evaluate_right(output)
                 continue
-            self.update_cache(left_value, self._cache_)
-            yield left_value
-
+            if self._is_duplicate_output_(output):
+                continue
+            self.update_cache(output, self._cache_)
+            yield output
+        self.left_evaluated = False
         yield from self.evaluate_right(sources)
 
-    def evaluate_right(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+    def evaluate_right(self, sources: Optional[Dict[int, HashedValue]]) -> Iterable[Dict[int, HashedValue]]:
         right_values = self.right._evaluate__(sources)
         # For the found left value, find all right values,
         # and yield the (left, right) results found.
         for right_value in right_values:
-            output = copy(right_value)
-            output.update(sources)
-            self._is_false_ = self.left._is_false_ and self.right._is_false_
-            if self._is_false_ and not self._yield_when_false_:
-                continue
-            if self._is_duplicate_output_(output):
-                continue
-            self.update_cache(right_value, self._cache_)
-            yield output
+            sources.update(right_value)
+            if self._yield_when_false_ and self.left_evaluated:
+                self._is_false_ = self.left._is_false_ and self.right._is_false_
+            else:
+                self._is_false_ = False
+            if not self._is_false_:
+                if self._is_duplicate_output_(sources):
+                    continue
+            self.right_evaluated = True
+            self.update_cache(sources, self._cache_)
+            yield sources
 
 @dataclass(eq=False)
 class ElseIf(OR):
@@ -1477,8 +1477,9 @@ class ElseIf(OR):
                     output.update(right_value)
                     if self._is_false_ and not self._yield_when_false_:
                         continue
-                    if self._is_false_ and self._is_duplicate_output_(output):
-                        continue
+                    if not self._is_false_:
+                        if self._is_duplicate_output_(output):
+                            continue
                     self.update_cache(right_value, self.right_cache)
                     yield output
             else:
@@ -1577,3 +1578,12 @@ def properties_to_expression_tree(var: CanBehaveLikeAVariable, properties: Dict[
         elif len(conditions) > 1:
             expression = chained_logic(AND, *conditions)
     return expression
+
+
+def _optimize_or(left: SymbolicExpression, right: SymbolicExpression) -> OR:
+    left_vars = left._unique_variables_.filter(lambda v: not isinstance(v.value, Literal))
+    right_vars = right._unique_variables_.filter(lambda v: not isinstance(v.value, Literal))
+    if left_vars == right_vars:
+        return ElseIf(left, right)
+    else:
+        return Union(left, right)

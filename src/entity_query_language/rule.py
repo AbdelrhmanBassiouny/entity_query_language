@@ -6,7 +6,7 @@ from .hashed_data import T
 from .enums import RDREdge
 from .symbolic import SymbolicExpression, chained_logic, AND, BinaryOperator, Variable, properties_to_expression_tree, \
     CanBehaveLikeAVariable, ResultQuantifier
-from .conclusion_selector import ExceptIf, Alternative, ConclusionSelector
+from .conclusion_selector import ExceptIf, Alternative, ConclusionSelector, Next
 
 if TYPE_CHECKING:
     from .predicate import Predicate
@@ -43,16 +43,49 @@ def alternative(*conditions: Union[SymbolicExpression[T], bool, Predicate]) -> S
     :param conditions: Conditions to chain with AND and attach as an alternative.
     :returns: The newly created branch node for further chaining.
     """
+    return alternative_or_next(RDREdge.Alternative, *conditions)
+
+
+def next_rule(*conditions: Union[SymbolicExpression[T], bool, Predicate]) -> SymbolicExpression[T]:
+    """
+    Add a consequent rule that gets always executed after the current rule.
+
+    Each provided condition is chained with AND, and the resulting branch is
+    connected via Next to the current node, representing the next path.
+
+    :param conditions: Conditions to chain with AND and attach as an alternative.
+    :returns: The newly created branch node for further chaining.
+    """
+    return alternative_or_next(RDREdge.Next, *conditions)
+
+
+def alternative_or_next(type_: Union[RDREdge.Alternative, RDREdge.Next],
+                        *conditions: Union[SymbolicExpression[T], bool, Predicate]) -> SymbolicExpression[T]:
+    """
+    Add an alternative/next branch to the current condition tree.
+
+    Each provided condition is chained with AND, and the resulting branch is
+    connected via ElseIf/Next to the current node, representing an alternative/next path.
+
+    :param type_: The type of the branch, either alternative or next.
+    :param conditions: Conditions to chain with AND and attach as an alternative.
+    :returns: The newly created branch node for further chaining.
+    """
     new_branch = chained_logic(AND, *conditions)
     current_node = SymbolicExpression._current_parent_()
-    if isinstance(current_node._parent_, Alternative):
+    if isinstance(current_node._parent_, (Alternative, Next)):
         current_node = current_node._parent_
     elif isinstance(current_node._parent_, ExceptIf) and current_node is current_node._parent_.left:
         current_node = current_node._parent_
     prev_parent = current_node._parent_
     current_node._parent_ = None
-    new_conditions_root = Alternative(current_node, new_branch)
-    new_branch._node_.weight = RDREdge.Alternative
+    if type_ == RDREdge.Alternative:
+        new_conditions_root = Alternative(current_node, new_branch)
+    elif type_ == RDREdge.Next:
+        new_conditions_root = Next(current_node, new_branch)
+    else:
+        raise ValueError(f"Invalid type: {type_}, expected one of: {RDREdge.Alternative}, {RDREdge.Next}")
+    new_branch._node_.weight = type_
     new_conditions_root._parent_ = prev_parent
     if isinstance(prev_parent, BinaryOperator):
         prev_parent.right = new_conditions_root

@@ -8,7 +8,7 @@ from typing import Dict, Optional, Iterable
 from .cache_data import SeenSet, is_caching_enabled
 from .conclusion import Conclusion
 from .hashed_data import HashedIterable, HashedValue
-from .symbolic import LogicalOperator, SymbolicExpression, ElseIf
+from .symbolic import LogicalOperator, SymbolicExpression, ElseIf, Union as EQLUnion, Literal
 
 
 @dataclass(eq=False)
@@ -27,7 +27,8 @@ class ConclusionSelector(LogicalOperator, ABC):
             return
         required_vars = HashedIterable()
         for conclusion in conclusions:
-            required_vars.update(conclusion._unique_variables_)
+            vars_ = conclusion._unique_variables_.filter(lambda v: not isinstance(v.value, Literal))
+            required_vars.update(vars_)
         required_output = {k: v for k, v in output.items() if k in required_vars}
         if not self.concluded_before[not self._is_false_].check(required_output):
             self._conclusion_.update(conclusions)
@@ -135,6 +136,23 @@ class Alternative(ElseIf, ConclusionSelector):
             if left_is_true:
                 self.update_conclusion(output, self.left._conclusion_)
             elif right_is_true:
+                self.update_conclusion(output, self.right._conclusion_)
+            yield output
+            self._conclusion_.clear()
+
+
+@dataclass(eq=False)
+class Next(EQLUnion, ConclusionSelector):
+    """
+    A Union conclusion selector that always evaluates the left and right branches and combines their results.
+    """
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        outputs = super()._evaluate__(sources)
+        for output in outputs:
+            if self.left_evaluated:
+                self.update_conclusion(output, self.left._conclusion_)
+            if self.right_evaluated:
                 self.update_conclusion(output, self.right._conclusion_)
             yield output
             self._conclusion_.clear()
