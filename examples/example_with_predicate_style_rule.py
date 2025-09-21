@@ -72,15 +72,17 @@ with rule_mode():
     # Declare the variables
     prismatic_connection = PrismaticConnection(From(world.connections))
     fixed_connection = FixedConnection(From(world.connections))
+
+    # Define some aliases for convenience
     parent_container = prismatic_connection.parent
     drawer_body = fixed_connection.parent
     handle = fixed_connection.child
 
     # Write the rule body
     rule = infer(entity(Drawer(handle=handle, container=drawer_body),
-                        HasType(prismatic_connection.parent, Container),
-                        HasType(fixed_connection.child, Handle),
-                        prismatic_connection.child == fixed_connection.parent))
+                        HasType(parent_container, Container),
+                        HasType(handle, Handle),
+                        drawer_body == prismatic_connection.child))
 
 solutions = list(rule.evaluate())
 assert len(solutions) == 2
