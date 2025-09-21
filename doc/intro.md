@@ -55,13 +55,17 @@ object instance and use them as part of the query conditions.
 
 ## More Example Usage
 
-- [Example with `the`](example_with_the.md): This example shows how to use `the` entity wrapper instead of `an`
+- [Example with `the`](example_with_the.md): This example shows how to use `the` entity wrapper instead of `an`.
 - [Example with `And` + `OR`](example_with_and_or.md): This shows an example of using `And` with `Or` together.
 - [Example with `Not`](example_with_not.md): This shows an example of using `Not`.
-- [Example with Joining Multiple Sources](example_with_joining_multiple_sources.md): This shows an example of using and joining multiple sources in your query. 
+- [Example with Joining Multiple Sources](example_with_joining_multiple_sources.md): This shows an example of using and joining multiple sources in your query.
+- [Example with Nested Queries](example_with_nested_queries.md): This shows how to compose queries by nesting queries inside others.
 - [Example with Rule Inference](example_with_rule_inference.md): This shows an example of writing inference rules in EQL.
+- [Example with Rule Tree](example_with_rule_tree.md): This shows how to build and visualize a rule tree.
 - [Example with Predicates](example_with_predicate.md): This shows how to write and use reusable predicates in queries.
 - [Example with Predicate Style Query/Rule](example_with_predicate_style_query.md): This shows queries and rules written in predicate (functional) style.
+- [Example with Cached Symbols](example_with_cached_symbols.md): This shows using cached @symbol instances without providing a domain.
+- [Example with Indexing](example_with_indexing.md): This shows capturing __getitem__ (indexing) in symbolic expressions.
 
 ## To Cite:
 

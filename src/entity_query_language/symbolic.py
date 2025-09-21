@@ -345,6 +345,10 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
             raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}")
         return Attribute(self, name)
 
+    def __getitem__(self, key) -> CanBehaveLikeAVariable[T]:
+        self._if_not_in_symbolic_mode_raise_error_('__getitem__')
+        return Index(self, key)
+
     def __call__(self, *args, **kwargs) -> CanBehaveLikeAVariable[T]:
         self._if_not_in_symbolic_mode_raise_error_('__call__')
         return Call(self, args, kwargs)
@@ -1072,6 +1076,21 @@ class Attribute(DomainMapping):
     @property
     def _name_(self):
         return f"{self._child_._name_}.{self._attr_name_}"
+
+
+@dataclass(eq=False)
+class Index(DomainMapping):
+    """
+    A symbolic indexing operation that can be used to access items of symbolic variables via [] operator.
+    """
+    _key_: Any
+
+    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
+        return HashedValue(id_=value.id_, value=value.value[self._key_])
+
+    @property
+    def _name_(self):
+        return f"{self._child_._name_}[{self._key_}]"
 
 
 @dataclass(eq=False)
