@@ -1,10 +1,3 @@
-# Example with `And` + `Or`
-
-Here is an example of a more nested query conditions.
-
-## Example Usage
-
-```python
 from dataclasses import dataclass
 
 from typing_extensions import List
@@ -40,7 +33,3 @@ with symbolic_mode():
 results = list(query.evaluate())
 assert len(results) == 2
 assert results[0].name == "Container1" and results[1].name == "Handle1"
-```
-
-This way of writing `And`, `Or` is exactly like constructing a tree which allows for the user to write in the same
-structure as how the computation is done internally.

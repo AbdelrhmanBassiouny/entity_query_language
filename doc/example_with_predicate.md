@@ -1,7 +1,8 @@
 # Example with `@predicate`
 
 Custom predicates allow you to encapsulate reusable boolean logic that can be used inside queries. 
-They are normal Python functions decorated with `@predicate`, and can refer to symbolic variables when used within `symbolic_mode()`.
+They can be any Python functions decorated with `@predicate`, or a dataclass that inherits from `Predicate` class
+in EQL. These two become symbolic variables when used within `symbolic_mode()`.
 
 ## Example Usage
 
@@ -9,25 +10,26 @@ They are normal Python functions decorated with `@predicate`, and can refer to s
 from dataclasses import dataclass
 from typing_extensions import List
 
-from entity_query_language import entity, let, an, predicate, symbolic_mode
+from entity_query_language import entity, let, an, predicate, symbolic_mode, symbol, Predicate
 
 
-@dataclass(unsafe_hash=True)
+@symbol
+@dataclass
 class Body:
     name: str
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Handle(Body):
     pass
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Container(Body):
     pass
 
-
-@dataclass(eq=False)
+@symbol
+@dataclass
 class World:
     id_: int
     bodies: List[Body]
@@ -37,6 +39,13 @@ class World:
 @predicate
 def is_handle(body_: Body) -> bool:
     return body_.name.startswith("Handle")
+
+@dataclass
+class HasThreeInItsName(Predicate):
+    body: Body
+
+    def __call__(self):
+        return '3' in self.body.name
 
 
 # Sample world containing containers and handles
@@ -55,17 +64,19 @@ world = World(
 with symbolic_mode():
     query = an(
         entity(
-            body := let("body", type_=Body, domain=world.bodies),
+            body := let(type_=Body, domain=world.bodies),
             is_handle(body_=body),  # use the predicate just like any other condition
+            HasThreeInItsName(body)
         )
     )
 
 # Evaluate and inspect the results
 results = list(query.evaluate())
-assert len(results) == 3
-assert all(isinstance(h, Handle) for h in results)
+assert len(results) == 1
+assert isinstance(results[0], Handle)
+assert results[0].name == "Handle3"
 ```
 
 Notes:
 - The `@predicate` decorator enables the function to participate in symbolic analysis when used under `symbolic_mode()`.
-- The original object instances from the domain (here, `world.bodies`) are returned, preserving their concrete runtime types (e.g., `Handle`).
+- The `Predicate` class is a dataclass used to define custom predicates by implementing the `__call__` method.

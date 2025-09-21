@@ -16,17 +16,20 @@ EQL tries to mirror your intent in a query statement with as less boiler plate c
 For example an attribute access with and equal check to another value is just how you expect:
 
 ```python
-from entity_query_language import entity, an, let, and_, contains
 from dataclasses import dataclass
+
 from typing_extensions import List
 
+from entity_query_language import entity, an, let, contains, symbolic_mode, symbol
 
-@dataclass(unsafe_hash=True)
+
+@symbol
+@dataclass
 class Body:
     name: str
 
 
-@dataclass(eq=False)
+@dataclass
 class World:
     id_: int
     bodies: List[Body]
@@ -34,10 +37,12 @@ class World:
 
 world = World(1, [Body("Body1"), Body("Body2")])
 
-results_generator = an(entity(body := let("body", type_=Body, domain=world.bodies),
-                              and_(contains(body.name, "2"), body.name.startswith("Body")))
-                       ).evaluate()
-results = list(results_generator)
+with symbolic_mode():
+    body = let(type_=Body, domain=world.bodies)
+    query = an(entity(body, contains(body.name, "2"),
+                      body.name.startswith("Body"))
+               )
+results = list(query.evaluate())
 assert len(results) == 1
 assert results[0].name == "Body2"
 ```
@@ -54,7 +59,7 @@ object instance and use them as part of the query conditions.
 - [Example with `And` + `OR`](example_with_and_or.md): This shows an example of using `And` with `Or` together.
 - [Example with `Not`](example_with_not.md): This shows an example of using `Not`.
 - [Example with Joining Multiple Sources](example_with_joining_multiple_sources.md): This shows an example of using and joining multiple sources in your query. 
-- [Example with Rule Inference](example_with_inference.md): This shows an example of writing inference rules in EQL.
+- [Example with Rule Inference](example_with_rule_inference.md): This shows an example of writing inference rules in EQL.
 - [Example with Predicates](example_with_predicate.md): This shows how to write and use reusable predicates in queries.
 - [Example with Predicate Style Query/Rule](example_with_predicate_style_query.md): This shows queries and rules written in predicate (functional) style.
 

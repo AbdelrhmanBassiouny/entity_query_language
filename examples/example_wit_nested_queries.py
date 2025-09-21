@@ -1,12 +1,3 @@
-# Example with Nested Queries
-
-Nested queries let you compose complex logic by building sub-queries and combining them using logical operators, just
-like simple expressions. This makes it easy to reuse and structure query logic.
-
-Here we demonstrate composing nested sub-queries over multiple sources. The two nested parts each constrain different
-subsets of variables, and combining them yields the same result as the flat version.
-
-```python
 from dataclasses import dataclass, field
 
 from typing_extensions import List
@@ -85,11 +76,3 @@ with symbolic_mode():
 
 nested_query_results = list(nested_query.evaluate())
 assert len(nested_query_results) == 2, "Should generate components for 2 drawers"
-``` 
-
-When to use nested queries:
-
-- To split a complex condition into meaningful, reusable parts.
-- To separate constraints that apply to different subsets of variables.
-- To improve readability and maintainability of large queries.
-

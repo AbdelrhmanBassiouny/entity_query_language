@@ -43,6 +43,8 @@ def predicate(function: Callable[..., T]) -> Callable[..., SymbolicExpression[T]
     return wrapper
 
 
+symbols_registry: List[Type] = []
+
 @dataclass_transform()
 def symbol(cls):
     """
@@ -56,6 +58,7 @@ def symbol(cls):
     :return: The same class with a patched ``__new__``.
     """
     original_new = cls.__new__ if '__new__' in cls.__dict__ else object.__new__
+    symbols_registry.append(cls)
 
     @profile
     def symbolic_new(symbolic_cls, *args, **kwargs):

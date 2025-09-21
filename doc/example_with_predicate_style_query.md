@@ -13,7 +13,7 @@ Here we show simple queries using the predicate form to find `Body` objects in a
 ```python
 from dataclasses import dataclass
 from typing_extensions import List
-from entity_query_language import an, entity, let, symbolic_mode, symbol
+from entity_query_language import an, entity, let, symbolic_mode, symbol, From
 
 @symbol
 @dataclass(unsafe_hash=True)
@@ -29,12 +29,12 @@ world = World(1, [Body("Container1"), Body("Container2"), Body("Handle1"), Body(
 
 # Empty-conditions predicate form: just specify the type; all bodies are generated
 with symbolic_mode():
-    query_all = an(entity(body := Body(), domain=world.bodies))
-assert len(list(query_all.evaluate())) == len(world.bodies)
+    query_all_bodies = Body(From(world.bodies))
+assert len(list(query_all_bodies.evaluate())) == len(world.bodies)
 
 # Predicate form with a specified property
 with symbolic_mode():
-    query_one = an(entity(Body(name="Handle1"), domain=world.bodies))
+    query_one = Body(From(world.bodies), name="Handle1")
 results_one = list(query_one.evaluate())
 assert len(results_one) == 1 and results_one[0].name == "Handle1"
 ```
@@ -45,13 +45,17 @@ Here we construct `Drawer` objects from matching kinematic sub-graphs using only
 
 ```python
 from dataclasses import dataclass
+
 from typing_extensions import List
-from entity_query_language import an, entity, let, symbolic_mode, symbol
+
+from entity_query_language import an, entity, symbolic_mode, symbol, From, a, rule_mode, infer, HasType
+
 
 @symbol
 @dataclass(unsafe_hash=True)
 class Body:
     name: str
+
 
 @symbol
 @dataclass
@@ -59,15 +63,18 @@ class Connection:
     parent: Body
     child: Body
 
+
 @symbol
 @dataclass
 class FixedConnection(Connection):
     ...
 
+
 @symbol
 @dataclass
 class PrismaticConnection(Connection):
     ...
+
 
 @dataclass(eq=False)
 class World:
@@ -75,15 +82,18 @@ class World:
     bodies: List[Body]
     connections: List[Connection]
 
+
 @symbol
 @dataclass
 class Handle(Body):
     ...
 
+
 @symbol
 @dataclass
 class Container(Body):
     ...
+
 
 @symbol
 @dataclass
@@ -91,9 +101,12 @@ class Drawer:
     handle: Handle
     container: Container
 
+
 # Build a small world with two drawer configurations
-handle1 = Handle("Handle1"); handle3 = Handle("Handle3")
-container1 = Container("Container1"); container3 = Container("Container3")
+handle1 = Handle("Handle1");
+handle3 = Handle("Handle3")
+container1 = Container("Container1");
+container3 = Container("Container3")
 fixed1 = FixedConnection(parent=container1, child=handle1)
 prism1 = PrismaticConnection(parent=container1, child=container1)  # not used directly but keeps structure
 fixed3 = FixedConnection(parent=container3, child=handle3)
@@ -101,19 +114,23 @@ prism3 = PrismaticConnection(parent=container3, child=container3)
 world = World(1, [container1, container3, handle1, handle3], [fixed1, prism1, fixed3, prism3])
 
 # Pure predicate-form rule: construct Drawer by matching sub-trees
-with symbolic_mode():
-    query = an(
-        entity(
-            Drawer(handle=an(entity(handle := Handle(), domain=world.bodies)),
-                   container=an(entity(container := Container(), domain=world.bodies))),
-            an(entity(FixedConnection(parent=container, child=handle), domain=world.connections)),
-            an(entity(PrismaticConnection(child=container), domain=world.connections))
-        )
-    )
+with rule_mode():
+    # Declare the variables
+    prismatic_connection = PrismaticConnection(From(world.connections))
+    fixed_connection = FixedConnection(From(world.connections))
+    parent_container = prismatic_connection.parent
+    drawer_body = fixed_connection.parent
+    handle = fixed_connection.child
 
-solutions = list(query.evaluate())
+    # Write the rule body
+    rule = infer(entity(Drawer(handle=handle, container=drawer_body),
+                        HasType(prismatic_connection.parent, Container),
+                        HasType(fixed_connection.child, Handle),
+                        prismatic_connection.child == fixed_connection.parent))
+
+solutions = list(rule.evaluate())
 assert len(solutions) == 2
-assert { (d.handle.name, d.container.name) for d in solutions } == { ("Handle1", "Container1"), ("Handle3", "Container3") }
+assert {(d.handle.name, d.container.name) for d in solutions} == {("Handle1", "Container1"), ("Handle3", "Container3")}
 ```
 
 Notes:

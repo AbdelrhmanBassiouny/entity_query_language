@@ -1,25 +1,26 @@
 from dataclasses import dataclass
 from typing_extensions import List
 
-from entity_query_language import entity, let, an, predicate, symbolic_mode
+from entity_query_language import entity, let, an, predicate, symbolic_mode, symbol, Predicate
 
 
-@dataclass(unsafe_hash=True)
+@symbol
+@dataclass
 class Body:
     name: str
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Handle(Body):
     pass
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Container(Body):
     pass
 
-
-@dataclass(eq=False)
+@symbol
+@dataclass
 class World:
     id_: int
     bodies: List[Body]
@@ -29,6 +30,13 @@ class World:
 @predicate
 def is_handle(body_: Body) -> bool:
     return body_.name.startswith("Handle")
+
+@dataclass
+class HasThreeInItsName(Predicate):
+    body: Body
+
+    def __call__(self):
+        return '3' in self.body.name
 
 
 # Sample world containing containers and handles
@@ -47,12 +55,14 @@ world = World(
 with symbolic_mode():
     query = an(
         entity(
-            body := let("body", type_=Body, domain=world.bodies),
+            body := let(type_=Body, domain=world.bodies),
             is_handle(body_=body),  # use the predicate just like any other condition
+            HasThreeInItsName(body)
         )
     )
 
 # Evaluate and inspect the results
 results = list(query.evaluate())
-assert len(results) == 3
-assert all(isinstance(h, Handle) for h in results)
+assert len(results) == 1
+assert isinstance(results[0], Handle)
+assert results[0].name == "Handle3"

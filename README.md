@@ -21,17 +21,20 @@ For example an attribute access with an equality check to another value is as si
 the equality operator. For example:
 
 ```python
-from entity_query_language import entity, an, let
 from dataclasses import dataclass
+
 from typing_extensions import List
 
+from entity_query_language import entity, an, let, contains, symbolic_mode, symbol
 
-@dataclass(unsafe_hash=True)
+
+@symbol
+@dataclass
 class Body:
     name: str
 
 
-@dataclass(eq=False)
+@dataclass
 class World:
     id_: int
     bodies: List[Body]
@@ -39,9 +42,15 @@ class World:
 
 world = World(1, [Body("Body1"), Body("Body2")])
 
-results_generator = an(entity(body := let("body", type_=Body, domain=world.bodies), body.name == "Body2")).evaluate()
-results = list(results_generator)
+with symbolic_mode():
+    body = let(type_=Body, domain=world.bodies)
+    query = an(entity(body, contains(body.name, "2"),
+                      body.name.startswith("Body"))
+               )
+results = list(query.evaluate())
+assert len(results) == 1
 assert results[0].name == "Body2"
+
 ```
 
 where this creates a body variable that gets its values from world.bodies, and filters them to have their att "name"

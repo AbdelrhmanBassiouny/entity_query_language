@@ -11,12 +11,14 @@ We will construct objects symbolically using symbolic_rule and Add, with let pla
 ## Example Usage
 
 ```python
-from entity_query_language import entity, an, let, and_, symbolic_mode, symbol, refinement, alternative, Add
+from entity_query_language import entity, an, let, and_, symbolic_mode, symbol, refinement, alternative, Add, rule_mode, \
+    HasType, infer
 from dataclasses import dataclass, field
 from typing_extensions import List
 
 
 # --- Domain model
+@symbol
 @dataclass
 class Body:
     name: str
@@ -24,49 +26,56 @@ class Body:
 
 
 @dataclass
+class Container(Body):
+    ...
+
+
+@dataclass
+class Handle(Body):
+    ...
+
+@symbol
+@dataclass
 class Connection:
     parent: Body
     child: Body
 
 
 @dataclass
-class Fixed(Connection):
+class FixedConnection(Connection):
     ...
 
 
 @dataclass
-class Revolute(Connection):
+class RevoluteConnection(Connection):
     ...
 
-
+@symbol
 @dataclass
 class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
 
-
+@symbol
 @dataclass
 class View:  # A common super-type for Drawer/Door/Wardrobe in this example
     ...
 
 
 # Views we will construct symbolically
-@symbol
 @dataclass
 class Drawer(View):
     handle: Body
     container: Body
 
 
-@symbol
 @dataclass
 class Door(View):
     handle: Body
     body: Body
 
 
-@symbol
 @dataclass
 class Wardrobe(View):
     handle: Body
@@ -75,34 +84,34 @@ class Wardrobe(View):
 
 
 # --- Build a small "world"
-container1, body2, body3, container2 = Body("Container1"), Body("Body2", size=2), Body("Body3"), Body("Container2")
-handle1, handle2, handle3 = Body("Handle1"), Body("Handle2"), Body("Handle3")
+container1, body2, body3, container2 = Container("Container1"), Body("Body2", size=2), Body("Body3"), Container("Container2")
+handle1, handle2, handle3 = Handle("Handle1"), Handle("Handle2"), Handle("Handle3")
 world = World(1, [container1, container2, body2, body3, handle1, handle2, handle3])
 
 # Connections between bodies/handles
-fixed_1 = Fixed(container1, handle1)
-fixed_2 = Fixed(body2, handle2)
-fixed_3 = Fixed(body3, handle3)
-revolute_1 = Revolute(container2, body3)
+fixed_1 = FixedConnection(container1, handle1)
+fixed_2 = FixedConnection(body2, handle2)
+fixed_3 = FixedConnection(body3, handle3)
+revolute_1 = RevoluteConnection(container2, body3)
 world.connections = [fixed_1, fixed_2, fixed_3, revolute_1]
 
-# --- Placeholders
-world = let("world", type_=World, domain=world)
-body = let("body", type_=Body, domain=world.bodies)
-container = let("container", type_=Body, domain=world.bodies)
-handle = let("handle", type_=Body, domain=world.bodies)
-fixed_connection = let("fixed_connection", type_=Fixed, domain=world.connections)
-revolute_connection = let("revolute_connection", type_=Revolute, domain=world.connections)
+with symbolic_mode():
+    # Declare the variables
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
+    views = let(type_=View)
 
-views = let("views", type_=View)
-# --- Describe base query
-# We use a single selected variable that we will Add to in the rule tree.
-query = an(entity(views,
-                  body == fixed_connection.parent,
-                  handle == fixed_connection.child))
+    # Define aliases for convenience
+    handle = fixed_connection.child
+    body = fixed_connection.parent
+    container = revolute_connection.parent
+
+    # Describe base query
+    # We use a single selected variable that we will Add to in the rule tree.
+    query = infer(entity(views, HasType(fixed_connection.child, Handle)))
 
 # --- Build the rule tree
-with symbolic_mode(query):
+with rule_mode(query):
     # Base conclusion: if a fixed connection exists between body and handle,
     # we consider it a Drawer by default.
     Add(views, Drawer(handle=handle, container=body))
@@ -122,8 +131,6 @@ with symbolic_mode(query):
 # Evaluate the rule tree
 results = list(query.evaluate())
 
-print(f"Results: {results}")
-
 # The results include objects built from different branches of the rule tree.
 # Depending on the world, you should observe a mix of Drawer, Door, and Wardrobe instances.
 assert len(results) == 3
@@ -134,6 +141,6 @@ assert any(isinstance(v, Wardrobe) and v.handle.name == "Handle3" for v in resul
 
 ### Notes
 - refinement(*conditions): narrows the context with an additional condition (like an exception/specialization).
-- alternative(*conditions): introduces a sibling branch with its own conditions; only if those are satisfied will that branch contribute conclusions.
+- alternative(*conditions): introduces a sibling branch with its own conditions; only if those are satisfied will that
+branch contribute conclusions.
 - Add(target, value): materializes a conclusion into the selected variable (here, a collection-like placeholder views).
-- Remember to always pass a mandatory name to let(name, type_, domain=...).

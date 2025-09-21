@@ -1,14 +1,3 @@
-# Example with `Joining` Multiple Sources.
-
-In this example, we show the how EQL can perform complex queries that require joining of multiple sources 
-(equivalent to tables in a structured database) without ever mentioning join or how to join, instead it is implicit
-in the conditions of the query.
-
-This allows for a minimal query description that only contains the high level logic.
-
-## Example Usage
-
-```python
 from dataclasses import dataclass, field
 
 from typing_extensions import List
@@ -87,8 +76,3 @@ assert len(results) == 1
 assert results[0][parent_container].name == "Container1"
 assert results[0][drawer_body].name == "Container2"
 assert results[0][handle].name == "Handle2"
-```
-
-In the above example we want to find all drawers and their components by describing their kinematic tree using a
-conjunction (AND operation) of conditions that show how the components are connected to each other to form the kinematic
-tree.

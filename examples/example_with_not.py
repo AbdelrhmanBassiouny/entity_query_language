@@ -1,11 +1,3 @@
-# Example with `Not`
-
-Negation is important and tricky. EQL tries to optimize the query when negation is used which greatly lowers wait time
-tof first response. This is done by avoiding evaluating all possibilities to evaluation the negation.
-
-## Example Usage
-
-```python
 from entity_query_language import entity, let, an, and_, or_, not_, symbol, symbolic_mode
 from dataclasses import dataclass
 from typing_extensions import List
@@ -36,7 +28,3 @@ with symbolic_mode():
 results = list(query.evaluate())
 assert len(results) == 2
 assert results[0].name == "Container2" and results[1].name == "Handle2"
-```
-
-Without the not this example yields `Container1` and `Handle1`, but with the not it yields the complement so
-`Container2` and `Handle2`.

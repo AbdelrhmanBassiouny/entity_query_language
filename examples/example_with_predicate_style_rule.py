@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from typing_extensions import List
 
-from entity_query_language import symbolic_mode, symbol, a
+from entity_query_language import an, entity, symbolic_mode, symbol, From, a, rule_mode, infer, HasType
 
 
 @symbol
@@ -67,16 +67,21 @@ fixed3 = FixedConnection(parent=container3, child=handle3)
 prism3 = PrismaticConnection(parent=container3, child=container3)
 world = World(1, [container1, container3, handle1, handle3], [fixed1, prism1, fixed3, prism3])
 
-# Pure predicate-form rule: construct Drawer by matching sub-graphs (here we remove entity as it is optional and
-# just clutters the query, but it is implicitly constructed)
-with symbolic_mode():
-    query = a(
-        Drawer(handle=a(handle := Handle(), domain=world.bodies),
-               container=a(container := Container(), domain=world.bodies)),
-        a(FixedConnection(parent=container, child=handle), domain=world.connections),
-        a(PrismaticConnection(child=container), domain=world.connections)
-    )
+# Pure predicate-form rule: construct Drawer by matching sub-trees
+with rule_mode():
+    # Declare the variables
+    prismatic_connection = PrismaticConnection(From(world.connections))
+    fixed_connection = FixedConnection(From(world.connections))
+    parent_container = prismatic_connection.parent
+    drawer_body = fixed_connection.parent
+    handle = fixed_connection.child
 
-solutions = list(query.evaluate())
+    # Write the rule body
+    rule = infer(entity(Drawer(handle=handle, container=drawer_body),
+                        HasType(prismatic_connection.parent, Container),
+                        HasType(fixed_connection.child, Handle),
+                        prismatic_connection.child == fixed_connection.parent))
+
+solutions = list(rule.evaluate())
 assert len(solutions) == 2
 assert {(d.handle.name, d.container.name) for d in solutions} == {("Handle1", "Container1"), ("Handle3", "Container3")}

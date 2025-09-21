@@ -10,7 +10,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tup
 from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
                        chained_logic, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode,
                        Variable, Infer, _optimize_or)
-from .predicate import Predicate
+from .predicate import Predicate, symbols_registry
 
 T = TypeVar('T')  # Define type variable "T"
 
@@ -82,7 +82,7 @@ def select_one_or_select_many_or_infer(quantifier: Union[Type[An], Type[The], Ty
     return q
 
 
-def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate]) -> Entity[T]:
+def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Predicate, Any]) -> Entity[T]:
     """
     Create an entity descriptor from a selected variable and its properties.
 
@@ -97,7 +97,7 @@ def entity(selected_variable: T, *properties: Union[SymbolicExpression, bool, Pr
     return Entity(selected_variables=selected_variables, _child_=expression)
 
 
-def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool]) -> SetOf[T]:
+def set_of(selected_variables: Iterable[T], *properties: Union[SymbolicExpression, bool, Predicate]) -> SetOf[T]:
     """
     Create a set descriptor from selected variables and their properties.
 
@@ -158,7 +158,10 @@ def let(type_: Type[T], domain: Optional[Any] = None, name: Optional[str] = None
     :type name: str
     :return: A Variable with the given type, name, and domain.
     :rtype: T
+    :raises ValueError: If the type is not registered as a symbol.
     """
+    if not any(issubclass(type_, t) for t in symbols_registry):
+        raise ValueError(f'Type {type_} is not registered as symbol, did you forget to decorate it with @symbol?')
     with symbolic_mode():
         if domain is None:
             var = type_()

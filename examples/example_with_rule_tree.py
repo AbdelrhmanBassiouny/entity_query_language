@@ -1,8 +1,7 @@
-from entity_query_language import entity, an, and_, symbolic_mode, symbol, refinement, alternative, Add, a
+from entity_query_language import entity, an, let, and_, symbolic_mode, symbol, refinement, alternative, Add, rule_mode, \
+    HasType, infer
 from dataclasses import dataclass, field
 from typing_extensions import List
-
-from entity_query_language.symbolic import rule_mode
 
 
 # --- Domain model
@@ -14,27 +13,36 @@ class Body:
 
 
 @dataclass
+class Container(Body):
+    ...
+
+
+@dataclass
+class Handle(Body):
+    ...
+
+@symbol
+@dataclass
 class Connection:
     parent: Body
     child: Body
 
-@symbol
-@dataclass
-class Fixed(Connection):
-    ...
 
-@symbol
 @dataclass
-class Revolute(Connection):
+class FixedConnection(Connection):
     ...
 
 
+@dataclass
+class RevoluteConnection(Connection):
+    ...
+
+@symbol
 @dataclass
 class World:
     id_: int
     bodies: List[Body]
     connections: List[Connection] = field(default_factory=list)
-
 
 @symbol
 @dataclass
@@ -43,21 +51,18 @@ class View:  # A common super-type for Drawer/Door/Wardrobe in this example
 
 
 # Views we will construct symbolically
-@symbol
 @dataclass
 class Drawer(View):
     handle: Body
     container: Body
 
 
-@symbol
 @dataclass
 class Door(View):
     handle: Body
     body: Body
 
 
-@symbol
 @dataclass
 class Wardrobe(View):
     handle: Body
@@ -66,24 +71,31 @@ class Wardrobe(View):
 
 
 # --- Build a small "world"
-container1, body2, body3, container2 = Body("Container1"), Body("Body2", size=2), Body("Body3"), Body("Container2")
-handle1, handle2, handle3 = Body("Handle1"), Body("Handle2"), Body("Handle3")
+container1, body2, body3, container2 = Container("Container1"), Body("Body2", size=2), Body("Body3"), Container("Container2")
+handle1, handle2, handle3 = Handle("Handle1"), Handle("Handle2"), Handle("Handle3")
 world = World(1, [container1, container2, body2, body3, handle1, handle2, handle3])
 
 # Connections between bodies/handles
-fixed_1 = Fixed(container1, handle1)
-fixed_2 = Fixed(body2, handle2)
-fixed_3 = Fixed(body3, handle3)
-revolute_1 = Revolute(container2, body3)
+fixed_1 = FixedConnection(container1, handle1)
+fixed_2 = FixedConnection(body2, handle2)
+fixed_3 = FixedConnection(body3, handle3)
+revolute_1 = RevoluteConnection(container2, body3)
 world.connections = [fixed_1, fixed_2, fixed_3, revolute_1]
 
-
-# --- Describe base query
-# We use a single selected variable that we will Add to in the rule tree.
 with symbolic_mode():
-    query = an(entity(views:=View(), Fixed(parent=(body:=Body()), child=(handle:=Body()))
-                      )
-               )
+    # Declare the variables
+    fixed_connection = let(type_=FixedConnection, domain=world.connections)
+    revolute_connection = let(type_=RevoluteConnection, domain=world.connections)
+    views = let(type_=View)
+
+    # Define aliases for convenience
+    handle = fixed_connection.child
+    body = fixed_connection.parent
+    container = revolute_connection.parent
+
+    # Describe base query
+    # We use a single selected variable that we will Add to in the rule tree.
+    query = infer(entity(views, HasType(fixed_connection.child, Handle)))
 
 # --- Build the rule tree
 with rule_mode(query):
@@ -98,15 +110,13 @@ with rule_mode(query):
 
         # Alternative refinement when the first refinement didn't fire: if the body is also connected to a parent
         # container via a revolute connection (alternative pattern), add a Wardrobe instead.
-        with alternative(Revolute(child=body, parent=(container:=Body()))):
+        with alternative(body == revolute_connection.child, container == revolute_connection.parent):
             Add(views, Wardrobe(handle=handle, body=body, container=container))
 
 # query._render_tree_()
 
 # Evaluate the rule tree
 results = list(query.evaluate())
-
-print(f"Results: {results}")
 
 # The results include objects built from different branches of the rule tree.
 # Depending on the world, you should observe a mix of Drawer, Door, and Wardrobe instances.
