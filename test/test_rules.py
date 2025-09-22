@@ -132,7 +132,7 @@ def test_rule_tree_with_a_refinement(doors_and_drawers_world):
         with refinement(body.size > 1):
             Add(drawers_and_doors, Door(handle=handle, body=body))
 
-    # query._render_tree_()
+    query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer and 1 door."
