@@ -167,7 +167,7 @@ def test_rule_tree_with_multiple_refinements(doors_and_drawers_world):
             with alternative(body == revolute_connection.child, container == revolute_connection.parent):
                 Add(views, Wardrobe(handle=handle, body=body, container=container))
 
-    # query._render_tree_()
+    query._render_tree_()
 
     all_solutions = list(query.evaluate())
     assert len(all_solutions) == 3, "Should generate 1 drawer, 1 door and 1 wardrobe."

@@ -116,17 +116,9 @@ class SymbolicExpression(Generic[T], ABC):
         if child is None:
             child = self._child_
         # When the child is a Variable or any CanBehaveLikeAVariable already attached elsewhere, wrap it instead of deep-copying
-        try:
-            if isinstance(child, Variable):
-                base = child._target_ if isinstance(child, ReusedVariable) else child
-                return ReusedVariable(base, postfix=f"_{self._id_}")
-            if isinstance(child, CanBehaveLikeAVariable):
-                base = child._target_ if isinstance(child, ReusedVarLike) else child
-                if not isinstance(base, Variable):
-                    return ReusedVarLike(base, postfix=f"_{self._id_}")
-        except NameError:
-            # Classes might not yet be defined at import time; fallback to copy
-            pass
+        if isinstance(child, CanBehaveLikeAVariable):
+            base = child._original_ if isinstance(child, ReusedVariable) else child
+            return ReusedVariable(base, f"_{self._id_}")
         child_cp = child._copy_expression_(f"_{self._id_}")
         return child_cp
 
@@ -994,8 +986,8 @@ class Variable(CanBehaveLikeAVariable[T]):
 
     def _copy_expression_(self, postfix: str) -> SymbolicExpression:
         # Instead of deep-copying the variable and its subtree, wrap it preserving the same id
-        base = self._target_ if isinstance(self, ReusedVariable) else self
-        return ReusedVariable(base, postfix=postfix)
+        base = self._original_ if isinstance(self, ReusedVariable) else self
+        return ReusedVariable(base, postfix)
 
     def __iter__(self):
         for v in self._domain_:
@@ -1516,7 +1508,7 @@ def Not(operand: Any) -> SymbolicExpression:
     elif isinstance(operand, SetOf):
         operand = operand.__class__(Not(operand._child_), operand.selected_variables)
     elif isinstance(operand, AND):
-        operand = ElseIf(Not(operand.left), Not(operand.right))
+        operand = Union(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
         for child in operand.left._descendants_:
             child._yield_when_false_ = False
@@ -1604,92 +1596,41 @@ def _optimize_or(left: SymbolicExpression, right: SymbolicExpression) -> OR:
 
 
 
-@dataclass(eq=False, init=False)
-class ReusedVariable(Variable):
+@dataclass(eq=False)
+class ReusedVariable(CanBehaveLikeAVariable):
     """
     A very simple wrapper around an existing Variable that:
     - reuses the same _id_ as the original variable,
     - creates its own anytree node for attachment under different parents,
     - delegates all behavior (evaluation, caching, etc.) to the original variable.
     """
-    _target_: Variable = field(init=False, repr=False)
+    _original_: CanBehaveLikeAVariable
+    _postfix_: str
 
-    def __init__(self, target: Variable, postfix: str = ""):
-        # Unwrap nested wrappers to always point to the base variable
-        base = target._target_ if isinstance(target, ReusedVariable) else target
-        self._target_ = base
-        # Preserve id and minimal identity info for display
-        self._id_ = base._id_
-        self._name__ = base._name__
-        self._type_ = base._type_
-        # Create a distinct node for this reuse site
-        target_node_name = getattr(base, "_node_", None).name if getattr(base, "_node_", None) else self._name__
-        self._create_node_(f"{target_node_name}{postfix}")
-        # Keep wrapper minimal
-        self._var_ = self
-        try:
-            self._yield_when_false_ = base._yield_when_false_
-        except Exception:
-            pass
+    def __post_init__(self):
+        self._child_ = None
+        super().__post_init__()
+        self._id_ = self._original_._id_
+        self._var_ = self._original_
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        # Delegate evaluation to the original variable; ids match, so bindings remain consistent
-        yield from self._target_._evaluate__(sources)
+        yield from self._original_._evaluate__(sources)
 
     def __iter__(self):
-        # Delegate iteration over domain to the original variable
-        yield from self._target_.__iter__()
+        yield from self._original_
 
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return self._target_._all_variable_instances_
+        return self._original_._all_variable_instances_
 
     @property
     def _name_(self):
-        return self._name__
+        return self._original_._var_._name_ + self._postfix_
 
     def __repr__(self):
-        return self._name__
+        return self._name_
 
-
-@dataclass(eq=False, init=False)
-class ReusedVarLike(CanBehaveLikeAVariable):
-    """
-    Generic wrapper for any CanBehaveLikeAVariable that shares the same id and delegates behavior
-    while providing a distinct anytree node for reuse under different parents.
-    """
-    _target_: CanBehaveLikeAVariable = field(init=False, repr=False)
-
-    def __init__(self, target: CanBehaveLikeAVariable, postfix: str = ""):
-        base = target._target_ if hasattr(target, "_target_") else target
-        self._target_ = base
-        # Preserve the same id as the base to keep joins/constraints consistent
-        self._id_ = base._id_
-        # Create separate node
-        try:
-            node_name = base._node_.name
-        except Exception:
-            node_name = getattr(base, "_name_", base.__class__.__name__)
-        self._create_node_(f"{node_name}{postfix}")
-        self._var_ = self
-        try:
-            self._yield_when_false_ = base._yield_when_false_
-        except Exception:
-            pass
-
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        # Delegate evaluation to the original expression; keys remain consistent due to shared id
-        yield from self._target_._evaluate__(sources)
-
-    @property
-    @lru_cache(maxsize=None)
-    def _all_variable_instances_(self) -> List[Variable]:
-        return self._target_._all_variable_instances_
-
-    @property
-    def _name_(self):
-        try:
-            return self._target_._name_
-        except Exception:
-            return self.__class__.__name__
+    def _reset_cache_(self) -> None:
+        super()._reset_cache_()
+        self._original_._reset_only_my_cache_()
