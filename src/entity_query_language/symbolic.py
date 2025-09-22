@@ -501,8 +501,10 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
 
     def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
         # Prevent debugger/private attribute lookups from being interpreted as symbolic attributes
-        if ((not in_symbolic_mode()) or
-                (name.startswith('__') and name.endswith('__') or (name.startswith('_') and not name.endswith('_')))):
+        if not in_symbolic_mode():
+            raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}, maybe you forgot to "
+                                 f"use the symbolic_mode context manager?")
+        if (name.startswith('__') and name.endswith('__')):
             raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}")
         return Attribute(self, name)
 
@@ -1168,12 +1170,18 @@ class Literal(Variable[T]):
     """
 
     def __init__(self, data: Any, name: Optional[str] = None, type_: Optional[Type] = None):
+        original_data = data
+        data = [data]
         if not is_iterable(data):
             data = HashedIterable([data])
         if not type_:
-            type_ = type(next(iter(data)))
+            first_value = next(iter(data), None)
+            type_ = type(first_value) if first_value else None
         if name is None:
-            name = type_.__name__
+            if type_:
+                name = type_.__name__
+            else:
+                name = type(original_data).__name__
         super().__init__(name, type_, _domain_source_=From(data))
 
 

@@ -505,6 +505,16 @@ def test_not_and_or(handles_and_containers_world):
     # query._render_tree_()
 
 
+def test_empty_list_literal(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        query = an(entity(body := let(type_=Body, domain=world.bodies),
+                          not_(contains([], "Handle") & contains(body.name, '1'))
+                          )
+                   )
+    results = list(query.evaluate())
+
+
 def test_not_and_or_with_domain_mapping(handles_and_containers_world):
     world = handles_and_containers_world
     with symbolic_mode():

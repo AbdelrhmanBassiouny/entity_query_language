@@ -149,7 +149,6 @@ def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callabl
     :return: The instantiated class.
     """
     instance = original_new(symbolic_cls)
-    instance.__init__(*args, **kwargs)
     index = index_class_cache(symbolic_cls)
     if index:
         if symbolic_cls not in cls_args:
