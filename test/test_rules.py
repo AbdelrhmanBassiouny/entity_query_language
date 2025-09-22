@@ -399,7 +399,7 @@ def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(door
                          revolute_connection.world == world):
             Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
 
-    # query._render_tree_()
+    query._render_tree_()
 
     all_solutions = list(query.evaluate())
     print(f"\nCache Enter Count = {cache_enter_count.values}")
@@ -419,7 +419,6 @@ def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(door
         elif isinstance(s, Wardrobe):
             solution_set.add((Wardrobe, s.handle.name, s.body.name, s.container.name))
     assert expected_solution_set == solution_set
-    # print(f"\nCache Match Percent = {_cache_match_count.values/_cache_search_count.values}")
 
 
 def test_rule_tree_with_multiple_alternatives_predicate_form_better_rule_tree(doors_and_drawers_world):

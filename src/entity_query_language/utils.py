@@ -340,16 +340,21 @@ class FilteredDotExporter(object):
                 yield "%s%s" % (indent, option)
 
     def __iter_nodes(self, indent, nodenamefunc, nodeattrfunc):
+        emitted_nodes = set()
         for node in PreOrderIter(self.node, maxlevel=self.maxlevel):
             nodename = nodenamefunc(node)
             if self.include_nodes is not None and nodename not in self.include_node_names:
                 continue
+            if nodename in emitted_nodes:
+                continue
+            emitted_nodes.add(nodename)
             nodeattr = nodeattrfunc(node)
             nodeattr = " [%s]" % nodeattr if nodeattr is not None else ""
             yield '%s"%s"%s;' % (indent, FilteredDotExporter.esc(nodename), nodeattr)
 
     def __iter_edges(self, indent, nodenamefunc, edgeattrfunc, edgetypefunc):
         maxlevel = self.maxlevel - 1 if self.maxlevel else None
+        emitted_edges = set()
         for node in PreOrderIter(self.node, maxlevel=maxlevel):
             nodename = nodenamefunc(node)
             if self.include_nodes is not None and nodename not in self.include_node_names:
@@ -358,6 +363,10 @@ class FilteredDotExporter(object):
                 childname = nodenamefunc(child)
                 if self.include_nodes is not None and childname not in self.include_node_names:
                     continue
+                edge_key = (nodename, childname)
+                if edge_key in emitted_edges:
+                    continue
+                emitted_edges.add(edge_key)
                 edgeattr = edgeattrfunc(node, child)
                 edgetype = edgetypefunc(node, child)
                 edgeattr = " [%s]" % edgeattr if edgeattr is not None else ""

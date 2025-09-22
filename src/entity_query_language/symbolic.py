@@ -20,10 +20,137 @@ from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from anytree import Node
+# Use rustworkx graph instead of anytree.Node
+try:
+    import rustworkx as rx
+except Exception:
+    class _DummyPyDiGraph:
+        def __init__(self):
+            self._nodes = []
+            self._edges = set()
+        def add_node(self, data):
+            self._nodes.append(data)
+            return len(self._nodes) - 1
+        def add_edge(self, a, b, weight=None):
+            key = (a, b)
+            if key in self._edges:
+                return
+            self._edges.add(key)
+    class rx:  # minimal fallback if rustworkx is not installed
+        PyDiGraph = _DummyPyDiGraph
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
                                Generic, TypeVar, TYPE_CHECKING)
 from typing_extensions import List, Tuple, Callable
+
+# ---- rustworkx-backed node wrapper to mimic needed anytree.Node API ----
+class RWXNode:
+    _graph: ClassVar[rx.PyDiGraph] = rx.PyDiGraph()
+    _registry: ClassVar[Dict[int, "RWXNode"]] = {}
+
+    def __init__(self, name: str):
+        self.name = name
+        self.weight = None
+        self._expression_ = None  # will be set by SymbolicExpression
+        self._primary_parent_id: Optional[int] = None
+        self._children_ids: set[int] = set()
+        # store self as node data to keep a 1:1 mapping
+        self.id: int = self._graph.add_node(self)
+        RWXNode._registry[self.id] = self
+        self.color = "white"
+
+    # Non-primary connect: add edge without changing primary parent pointer
+    def add_parent(self, parent: "RWXNode", edge_weight=None):
+        # Avoid self-loops
+        if parent is self:
+            return
+        # Do not add duplicate edges between the same two nodes
+        if self.id in parent._children_ids:
+            return
+        # Avoid creating cycles: only skip if a path from this node to the prospective parent already exists
+        if self.has_path_to(parent):
+            return
+        # Add edge in graph and track adjacency
+        try:
+            self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
+        except Exception:
+            # rustworkx may allow parallel edges; we already guard against duplicates via _children_ids
+            pass
+        parent._children_ids.add(self.id)
+
+    @property
+    def parent(self) -> Optional["RWXNode"]:
+        if self._primary_parent_id is None:
+            return None
+        return RWXNode._registry.get(self._primary_parent_id)
+
+    @parent.setter
+    def parent(self, value: Optional["RWXNode"]):
+        old_parent = RWXNode._registry.get(self._primary_parent_id) if self._primary_parent_id is not None else None
+        if value is None:
+            if old_parent is not None:
+                if self.id in old_parent._children_ids:
+                    old_parent._children_ids.discard(self.id)
+            self._primary_parent_id = None
+            return
+        # Reparent: remove from old parent's children if different
+        if old_parent is not None and old_parent is not value:
+            if self.id in old_parent._children_ids:
+                old_parent._children_ids.discard(self.id)
+        # Create edge and set as primary
+        self.add_parent(value)
+        self._primary_parent_id = value.id
+
+    def has_path_to(self, target: "RWXNode") -> bool:
+        if self is target:
+            return True
+        seen = set()
+        stack = [self]
+        while stack:
+            n = stack.pop()
+            if n.id in seen:
+                continue
+            seen.add(n.id)
+            if n is target:
+                return True
+            for cid in n._children_ids:
+                stack.append(RWXNode._registry[cid])
+        return False
+
+    @property
+    def children(self) -> List["RWXNode"]:
+        return [RWXNode._registry[cid] for cid in list(self._children_ids)]
+
+    @property
+    def descendants(self) -> List["RWXNode"]:
+        result: List[RWXNode] = []
+        stack = list(self.children)
+        seen = set()
+        while stack:
+            n = stack.pop()
+            if n.id in seen:
+                continue
+            seen.add(n.id)
+            result.append(n)
+            stack.extend(n.children)
+        return result
+
+    @property
+    def leaves(self) -> List["RWXNode"]:
+        leaves: List[RWXNode] = []
+        for n in [self] + self.descendants:
+            if len(n._children_ids) == 0:
+                leaves.append(n)
+        return leaves
+
+    @property
+    def root(self) -> "RWXNode":
+        n = self
+        while n.parent is not None:
+            n = n.parent
+        return n
+
+    def __str__(self):
+        return self.name
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache, get_cache_keys_for_class_, yield_class_values_from_cache
@@ -78,7 +205,7 @@ class SymbolicExpression(Generic[T], ABC):
     """
     _child_: Optional[SymbolicExpression] = field(init=False)
     _id_: int = field(init=False, repr=False, default=None)
-    _node_: Node = field(init=False, default=None, repr=False)
+    _node_: RWXNode = field(init=False, default=None, repr=False)
     _id_expression_map_: ClassVar[Dict[int, SymbolicExpression]] = {}
     _conclusion_: typing.Set[Conclusion] = field(init=False, default_factory=set)
     _symbolic_expression_stack_: ClassVar[List[SymbolicExpression]] = []
@@ -86,6 +213,8 @@ class SymbolicExpression(Generic[T], ABC):
     _is_false_: bool = field(init=False, repr=False, default=False)
     _seen_parent_values_: Dict[bool, SeenSet] = field(default_factory=lambda: {True: SeenSet(), False: SeenSet()},
                                                       init=False)
+    _seen_parent_values_by_parent_: Dict[int, Dict[bool, SeenSet]] = field(default_factory=dict, init=False)
+    _eval_parent_: Optional[SymbolicExpression] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if not self._id_:
@@ -106,10 +235,12 @@ class SymbolicExpression(Generic[T], ABC):
             if not isinstance(v, SymbolicExpression):
                 children[k] = Literal(v)
         for k, v in children.items():
-            if (v._node_.parent is not None
-                    and v._node_.parent is not self._node_):
-                children[k] = self._copy_child_expression_(v)
-            children[k]._node_.parent = self._node_
+            # With graph structure, do not copy nodes; just connect an edge.
+            if v._node_.parent is None:
+                v._node_.parent = self._node_
+            else:
+                # keep existing primary parent; just add a new edge from this parent
+                v._node_.add_parent(self._node_)
         return tuple(children.values())
 
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
@@ -131,7 +262,7 @@ class SymbolicExpression(Generic[T], ABC):
         return cp
 
     def _create_node_(self, name: str):
-        self._node_ = Node(name)
+        self._node_ = RWXNode(name)
         self._node_._expression_ = self
 
     def _reset_cache_(self) -> None:
@@ -147,6 +278,9 @@ class SymbolicExpression(Generic[T], ABC):
         Reset only the cache of this symbolic expression.
         """
         self._seen_parent_values_ = {True: SeenSet(), False: SeenSet()}
+        # Also reset per-parent duplicate tracking and runtime eval parent to ensure reevaluation works
+        self._seen_parent_values_by_parent_ = {}
+        self._eval_parent_ = None
 
     @property
     def _yield_when_false_(self) -> bool:
@@ -193,11 +327,14 @@ class SymbolicExpression(Generic[T], ABC):
     @_parent_.setter
     def _parent_(self, value: Optional[SymbolicExpression]):
         self._node_.parent = value._node_ if value is not None else None
-        if value is not None and hasattr(value, '_child_') and value._child_ is not None:
+        if value is not None and hasattr(value, '_child_'):
             value._child_ = self
 
     def _render_tree_(self, use_dot: bool = True, show_in_console: bool = False):
-        render_tree(self._root_._node_, use_dot, view=use_dot, show_in_console=show_in_console)
+        try:
+            render_tree(self._root_._node_, use_dot, view=use_dot, show_in_console=show_in_console)
+        except Exception as e:
+            logger.warning(f"render_tree is not available for RWXNode: {e}")
 
     @property
     def _conditions_root_(self) -> SymbolicExpression:
@@ -282,10 +419,16 @@ class SymbolicExpression(Generic[T], ABC):
         required_output = {k: v for k, v in output.items() if k in required_vars}
         if not required_output:
             return False
-        if self._seen_parent_values_[not self._is_false_].check(required_output):
+        # Use a per-parent seen set to avoid suppressing outputs across different parent contexts
+        runtime_parent = getattr(self, "_eval_parent_", None)
+        parent_expr = runtime_parent or self._parent_
+        parent_id = parent_expr._id_ if parent_expr is not None else -1
+        seen_by_truth = self._seen_parent_values_by_parent_.setdefault(parent_id, {True: SeenSet(), False: SeenSet()})
+        seen_set = seen_by_truth[not self._is_false_]
+        if seen_set.check(required_output):
             return True
         else:
-            self._seen_parent_values_[not self._is_false_].add(required_output)
+            seen_set.add(required_output)
             return False
 
     def __and__(self, other):
@@ -1322,33 +1465,43 @@ class AND(LogicalOperator):
         sources = sources or {}
 
         # constrain left values by available sources
-        left_values = self.left._evaluate__(sources)
-        for left_value in left_values:
-            left_value.update(sources)
-            if self._yield_when_false_ and self.left._is_false_:
-                self._is_false_ = True
-                if self._is_duplicate_output_(left_value):
+        left_prev = self.left._eval_parent_
+        self.left._eval_parent_ = self
+        try:
+            left_values = self.left._evaluate__(sources)
+            for left_value in left_values:
+                left_value.update(sources)
+                if self._yield_when_false_ and self.left._is_false_:
+                    self._is_false_ = True
+                    if self._is_duplicate_output_(left_value):
+                        continue
+                    yield left_value
                     continue
-                yield left_value
-                continue
 
-            if is_caching_enabled() and self.right_cache.check(left_value):
-                yield from self.yield_final_output_from_cache(left_value, self.right_cache)
-                continue
-
-            # constrain right values by available sources
-            right_values = self.right._evaluate__(left_value)
-
-            # For the found left value, find all right values,
-            # and yield the (left, right) results found.
-            for right_value in right_values:
-                output = copy(right_value)
-                output.update(left_value)
-                self._is_false_ = self.right._is_false_
-                if self._is_false_ and self._is_duplicate_output_(output):
+                if is_caching_enabled() and self.right_cache.check(left_value):
+                    yield from self.yield_final_output_from_cache(left_value, self.right_cache)
                     continue
-                self.update_cache(right_value, self.right_cache)
-                yield output
+
+                # constrain right values by available sources
+                right_prev = self.right._eval_parent_
+                self.right._eval_parent_ = self
+                try:
+                    right_values = self.right._evaluate__(left_value)
+
+                    # For the found left value, find all right values,
+                    # and yield the (left, right) results found.
+                    for right_value in right_values:
+                        output = copy(right_value)
+                        output.update(left_value)
+                        self._is_false_ = self.right._is_false_
+                        if self._is_false_ and self._is_duplicate_output_(output):
+                            continue
+                        self.update_cache(right_value, self.right_cache)
+                        yield output
+                finally:
+                    self.right._eval_parent_ = right_prev
+        finally:
+            self.left._eval_parent_ = left_prev
 
 
 @dataclass(eq=False)
@@ -1403,20 +1556,25 @@ class Union(OR):
             return
 
         # constrain left values by available sources
-        left_values = self.left._evaluate__(sources)
+        left_prev = self.left._eval_parent_
+        self.left._eval_parent_ = self
+        try:
+            left_values = self.left._evaluate__(sources)
 
-        for left_value in left_values:
-            output = copy(sources)
-            output.update(left_value)
-            self.left_evaluated = True
-            if self.left._is_false_:
-                if self._yield_when_false_:
-                    yield from self.evaluate_right(output)
-                continue
-            if self._is_duplicate_output_(output):
-                continue
-            self.update_cache(output, self._cache_)
-            yield output
+            for left_value in left_values:
+                output = copy(sources)
+                output.update(left_value)
+                self.left_evaluated = True
+                if self.left._is_false_:
+                    if self._yield_when_false_:
+                        yield from self.evaluate_right(output)
+                    continue
+                if self._is_duplicate_output_(output):
+                    continue
+                self.update_cache(output, self._cache_)
+                yield output
+        finally:
+            self.left._eval_parent_ = left_prev
         self.left_evaluated = False
         yield from self.evaluate_right(sources)
 
@@ -1468,28 +1626,38 @@ class ElseIf(OR):
         sources = sources or {}
 
         # constrain left values by available sources
-        left_values = self.left._evaluate__(sources)
-        for left_value in left_values:
-            left_value.update(sources)
-            if self.left._is_false_:
-                if is_caching_enabled() and self.right_cache.check(left_value):
-                    yield from self.yield_final_output_from_cache(left_value, self.right_cache)
-                    continue
-                right_values = self.right._evaluate__(left_value)
-                for right_value in right_values:
-                    self._is_false_ = self.right._is_false_
-                    output = copy(left_value)
-                    output.update(right_value)
-                    if self._is_false_ and not self._yield_when_false_:
+        left_prev = self.left._eval_parent_
+        self.left._eval_parent_ = self
+        try:
+            left_values = self.left._evaluate__(sources)
+            for left_value in left_values:
+                left_value.update(sources)
+                if self.left._is_false_:
+                    if is_caching_enabled() and self.right_cache.check(left_value):
+                        yield from self.yield_final_output_from_cache(left_value, self.right_cache)
                         continue
-                    if not self._is_false_:
-                        if self._is_duplicate_output_(output):
-                            continue
-                    self.update_cache(right_value, self.right_cache)
-                    yield output
-            else:
-                self._is_false_ = False
-                yield left_value
+                    right_prev = self.right._eval_parent_
+                    self.right._eval_parent_ = self
+                    try:
+                        right_values = self.right._evaluate__(left_value)
+                        for right_value in right_values:
+                            self._is_false_ = self.right._is_false_
+                            output = copy(left_value)
+                            output.update(right_value)
+                            if self._is_false_ and not self._yield_when_false_:
+                                continue
+                            if not self._is_false_:
+                                if self._is_duplicate_output_(output):
+                                    continue
+                            self.update_cache(right_value, self.right_cache)
+                            yield output
+                    finally:
+                        self.right._eval_parent_ = right_prev
+                else:
+                    self._is_false_ = False
+                    yield left_value
+        finally:
+            self.left._eval_parent_ = left_prev
 
 
 def Not(operand: Any) -> SymbolicExpression:
