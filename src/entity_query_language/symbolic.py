@@ -337,8 +337,10 @@ class CanBehaveLikeAVariable(SymbolicExpression[T], ABC):
 
     def __getattr__(self, name: str) -> CanBehaveLikeAVariable[T]:
         # Prevent debugger/private attribute lookups from being interpreted as symbolic attributes
-        if ((not in_symbolic_mode()) or
-                (name.startswith('__') and name.endswith('__') or (name.startswith('_') and not name.endswith('_')))):
+        if not in_symbolic_mode():
+            raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}, maybe you forgot to "
+                                 f"use the symbolic_mode context manager?")
+        if (name.startswith('__') and name.endswith('__')) or (name.startswith('_') and not name.endswith('_')):
             raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}")
         return Attribute(self, name)
 
