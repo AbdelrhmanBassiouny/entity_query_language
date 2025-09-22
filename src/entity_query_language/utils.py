@@ -520,55 +520,6 @@ def render_tree(root: Node, use_dot_exporter: bool = False,
 
         collect(root)
 
-        # igraph backend (optional)
-        if render_backend == "igraph":
-            try:
-                import igraph as ig
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"igraph is not installed; falling back to graphviz. Error: {e}")
-                render_backend = "graphviz"
-            else:
-                filename_base = filename or "query_tree"
-                # Build graph
-                g = ig.Graph(directed=True)
-                idx_map = {idn: i for i, idn in enumerate(map(id, nodes))}
-                g.add_vertices(len(nodes))
-                # Set vertex attributes
-                g.vs["label"] = [getattr(n, 'name', str(n)) for n in nodes]
-                g.vs["fillcolor"] = [getattr(n, 'color', 'white') for n in nodes]
-                # Add edges and labels
-                ig_edges = [(idx_map[a], idx_map[b]) for (a, b) in edges]
-                g.add_edges(ig_edges)
-                edge_labels = []
-                for (a, b) in edges:
-                    child_obj = next((x for x in nodes if id(x) == b), None)
-                    wt = getattr(child_obj, 'weight', None)
-                    edge_labels.append(str(wt) if wt is not None else "")
-                g.es["label"] = edge_labels
-                # Choose layout
-                layout = None
-                try:
-                    if layout_engine == "tree":
-                        root_idx = idx_map.get(id(root), 0)
-                        layout = g.layout_reingold_tilford(root=[root_idx])
-                    elif layout_engine in ("kk", "kamada_kawai"):
-                        layout = g.layout("kk")
-                    elif layout_engine in ("fr", "fruchterman_reingold"):
-                        layout = g.layout("fr")
-                    elif layout_engine == "sugiyama":
-                        layout = g.layout_sugiyama()
-                    else:
-                        layout = g.layout("kk")
-                except Exception:
-                    layout = g.layout("kk")
-                # Plot to SVG
-                try:
-                    ig.plot(g, target=f"{filename_base}.svg", layout=layout,
-                            vertex_label=g.vs["label"], edge_label=g.es["label"])  # type: ignore[arg-type]
-                except Exception as e:  # pragma: no cover
-                    logger.warning(f"igraph plot failed: {e}")
-                return
-
         # Fallback or explicit graphviz backend for RWX
         # Build DOT string
         lines = ["digraph tree {"]

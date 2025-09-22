@@ -20,46 +20,20 @@ from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-# Use rustworkx graph instead of anytree.Node
-try:
-    import rustworkx as rx
-except Exception:
-    class _DummyPyDiGraph:
-        def __init__(self):
-            self._nodes = []
-            self._edges = set()  # set of (u, v)
-        def add_node(self, data):
-            self._nodes.append(data)
-            return len(self._nodes) - 1
-        def add_edge(self, a, b, weight=None):
-            key = (a, b)
-            if key in self._edges:
-                return
-            self._edges.add(key)
-        def has_edge(self, a, b):
-            return (a, b) in self._edges
-        def successors(self, a):
-            return [v for (u, v) in self._edges if u == a]
-        def predecessors(self, b):
-            return [u for (u, v) in self._edges if v == b]
-        def __getitem__(self, idx):
-            return self._nodes[idx]
-    class rx:  # minimal fallback if rustworkx is not installed
-        PyDiGraph = _DummyPyDiGraph
+import rustworkx as rx
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
                                Generic, TypeVar, TYPE_CHECKING)
 from typing_extensions import List, Tuple, Callable
 
 # ---- rustworkx-backed node wrapper to mimic needed anytree.Node API ----
 class RWXNode:
-    _graph: ClassVar[rx.PyDiGraph] = rx.PyDiGraph()
+    _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
 
     def __init__(self, name: str):
         self.name = name
         self.weight = None
         self._expression_ = None  # will be set by SymbolicExpression
         self._primary_parent_id: Optional[int] = None
-        self._children_ids: set[int] = set()
         # store self as node data to keep a 1:1 mapping
         self.id: int = self._graph.add_node(self)
         self.color = "white"
@@ -70,96 +44,61 @@ class RWXNode:
         if parent is self:
             return
         # Do not add duplicate edges between the same two nodes
-        if self.id in parent._children_ids:
+        if self._graph.has_edge(parent.id, self.id):
             return
-        # Avoid creating cycles: only skip if a path from this node to the prospective parent already exists
-        if self.has_path_to(parent):
-            return
-        # Add edge in graph and track adjacency
-        try:
-            self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
-        except Exception:
-            # rustworkx may allow parallel edges; we already guard against duplicates via _children_ids
-            pass
-        parent._children_ids.add(self.id)
+        # Avoid creating cycles: PyDAG will raise if creates a cycle
+        self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
+
+    def remove(self):
+        self._graph.remove_node(self.id)
+
+    def remove_node(self, node: RWXNode):
+        self._graph.remove_node(node.id)
+
+    def remove_child(self, child: RWXNode):
+        child.remove_parent(self)
+
+    def remove_parent(self, parent: RWXNode):
+        self._graph.remove_edge(parent.id, self.id)
+
+    @property
+    def ancestors(self) -> List[RWXNode]:
+        node_ids = rx.ancestors(self._graph, self.id)
+        return [self._graph[n_id] for n_id in node_ids]
+
+    @property
+    def parents(self)-> List[RWXNode]:
+        return self._graph.predecessors(self.id)
 
     @property
     def parent(self) -> Optional["RWXNode"]:
         if self._primary_parent_id is None:
             return None
-        # use rustworkx graph data storage
-        try:
-            return self._graph[self._primary_parent_id]
-        except Exception:
-            return None
+        return self._graph[self._primary_parent_id]
 
     @parent.setter
     def parent(self, value: Optional["RWXNode"]):
-        old_parent = self._graph[self._primary_parent_id] if self._primary_parent_id is not None else None
         if value is None:
-            if old_parent is not None:
-                if self.id in old_parent._children_ids:
-                    old_parent._children_ids.discard(self.id)
+            # detach current parent
+            self._graph.remove_edge(self._primary_parent_id, self.id)
             self._primary_parent_id = None
             return
-        # Reparent: remove from old parent's children if different
-        if old_parent is not None and old_parent is not value:
-            if self.id in old_parent._children_ids:
-                old_parent._children_ids.discard(self.id)
-        # Create edge and set as primary
+        # Create edge and set as primary (no need to detach non-primary edges)
         self.add_parent(value)
         self._primary_parent_id = value.id
 
-    def has_path_to(self, target: "RWXNode") -> bool:
-        if self is target:
-            return True
-        seen = set()
-        stack = [self]
-        while stack:
-            n = stack.pop()
-            if n.id in seen:
-                continue
-            seen.add(n.id)
-            if n is target:
-                return True
-            for cid in n._children_ids:
-                try:
-                    stack.append(self._graph[cid])
-                except Exception:
-                    pass
-        return False
-
     @property
     def children(self) -> List["RWXNode"]:
-        result = []
-        for cid in list(self._children_ids):
-            try:
-                result.append(self._graph[cid])
-            except Exception:
-                pass
-        return result
+        return self._graph.successors(self.id)
 
     @property
     def descendants(self) -> List["RWXNode"]:
-        result: List[RWXNode] = []
-        stack = list(self.children)
-        seen = set()
-        while stack:
-            n = stack.pop()
-            if n.id in seen:
-                continue
-            seen.add(n.id)
-            result.append(n)
-            stack.extend(n.children)
-        return result
+        desc_ids = rx.descendants(self._graph, self.id)
+        return [self._graph[nid] for nid in desc_ids]
 
     @property
     def leaves(self) -> List["RWXNode"]:
-        leaves: List[RWXNode] = []
-        for n in [self] + self.descendants:
-            if len(n._children_ids) == 0:
-                leaves.append(n)
-        return leaves
+        return [n for n in [self] + self.descendants if self._graph.out_degree(n.id) == 0]
 
     @property
     def root(self) -> "RWXNode":
@@ -255,11 +194,7 @@ class SymbolicExpression(Generic[T], ABC):
                 children[k] = Literal(v)
         for k, v in children.items():
             # With graph structure, do not copy nodes; just connect an edge.
-            if v._node_.parent is None:
-                v._node_.parent = self._node_
-            else:
-                # keep existing primary parent; just add a new edge from this parent
-                v._node_.add_parent(self._node_)
+            v._node_.parent = self._node_
         return tuple(children.values())
 
     def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
@@ -964,7 +899,7 @@ class Variable(CanBehaveLikeAVariable[T]):
                 if isinstance(v, SymbolicExpression):
                     self._child_vars_[k] = v
                 else:
-                    self._child_vars_[k] = Literal(v, name=self._name_ + '.' + k)
+                    self._child_vars_[k] = Literal(v, name=k)
             self._update_children_(*self._child_vars_.values())
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
@@ -1013,9 +948,23 @@ class Variable(CanBehaveLikeAVariable[T]):
         self._domain_source_ = From(self._cache_values_)
         self._update_domain_(self._domain_source_.domain)
         if self._kwargs_:
-            self._kwargs_expression_ = properties_to_expression_tree(self, self._child_vars_)
-            self._kwargs_expression_._node_.parent = self._node_
+            parents = [p for p in self._node_.parents]
+            self._kwargs_expression_, attributes = properties_to_expression_tree(self, self._child_vars_)
+            self._kwargs_expression_ = An(Entity(self._kwargs_expression_, [self]))
+            self._replace_expression_with_(self._kwargs_expression_, parents)
             self._kwargs_expression_._yield_when_false_ = self._yield_when_false_
+
+    def _replace_expression_with_(self, new_expression: SymbolicExpression,
+                                parents: Optional[List] = None):
+        if not parents:
+            parents = [p for p in self._node_.parents if new_expression._node_ not in p.ancestors]
+        for child in self._node_.children:
+            self._node_.remove_child(child)
+        for parent in parents:
+            new_expression._parent_ = parent._expression_
+            self._node_.remove_parent(parent)
+        self._node_.remove()
+        self._node_ = new_expression._node_
 
     def _instantiate_new_values_or_yield_from_cache_(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
@@ -1767,20 +1716,19 @@ def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQ
         _set_symbolic_mode(prev_mode)
 
 
-def properties_to_expression_tree(var: CanBehaveLikeAVariable, properties: Dict[str, Any]) -> SymbolicExpression:
+def properties_to_expression_tree(var: CanBehaveLikeAVariable, properties: Dict[str, Any])\
+    -> Tuple[SymbolicExpression, List[SymbolicExpression]]:
     """
     Convert properties of a variable to a symbolic expression.
     """
     with symbolic_mode():
-        conditions = []
-        if properties:
-            conditions.extend([getattr(var, k) == v for k, v in properties.items()])
+        conditions = [getattr(var, k) == v for k, v in properties.items()]
         expression = None
         if len(conditions) == 1:
             expression = conditions[0]
         elif len(conditions) > 1:
             expression = chained_logic(AND, *conditions)
-    return expression
+    return expression, [op.left for op in conditions]
 
 
 def _optimize_or(left: SymbolicExpression, right: SymbolicExpression) -> OR:

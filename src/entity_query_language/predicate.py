@@ -134,7 +134,7 @@ def extract_selected_variable_and_expression(symbolic_cls: Type, domain: Optiona
     var = Variable(symbolic_cls.__name__, symbolic_cls, _domain_source_=domain, _predicate_type_=predicate_type,
                    _is_indexed_=index_class_cache(symbolic_cls))
 
-    expression = properties_to_expression_tree(var, kwargs)
+    expression, _ = properties_to_expression_tree(var, kwargs)
 
     return var, expression
 
