@@ -27,7 +27,7 @@ except Exception:
     class _DummyPyDiGraph:
         def __init__(self):
             self._nodes = []
-            self._edges = set()
+            self._edges = set()  # set of (u, v)
         def add_node(self, data):
             self._nodes.append(data)
             return len(self._nodes) - 1
@@ -36,6 +36,14 @@ except Exception:
             if key in self._edges:
                 return
             self._edges.add(key)
+        def has_edge(self, a, b):
+            return (a, b) in self._edges
+        def successors(self, a):
+            return [v for (u, v) in self._edges if u == a]
+        def predecessors(self, b):
+            return [u for (u, v) in self._edges if v == b]
+        def __getitem__(self, idx):
+            return self._nodes[idx]
     class rx:  # minimal fallback if rustworkx is not installed
         PyDiGraph = _DummyPyDiGraph
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
@@ -45,7 +53,6 @@ from typing_extensions import List, Tuple, Callable
 # ---- rustworkx-backed node wrapper to mimic needed anytree.Node API ----
 class RWXNode:
     _graph: ClassVar[rx.PyDiGraph] = rx.PyDiGraph()
-    _registry: ClassVar[Dict[int, "RWXNode"]] = {}
 
     def __init__(self, name: str):
         self.name = name
@@ -55,7 +62,6 @@ class RWXNode:
         self._children_ids: set[int] = set()
         # store self as node data to keep a 1:1 mapping
         self.id: int = self._graph.add_node(self)
-        RWXNode._registry[self.id] = self
         self.color = "white"
 
     # Non-primary connect: add edge without changing primary parent pointer
@@ -81,11 +87,15 @@ class RWXNode:
     def parent(self) -> Optional["RWXNode"]:
         if self._primary_parent_id is None:
             return None
-        return RWXNode._registry.get(self._primary_parent_id)
+        # use rustworkx graph data storage
+        try:
+            return self._graph[self._primary_parent_id]
+        except Exception:
+            return None
 
     @parent.setter
     def parent(self, value: Optional["RWXNode"]):
-        old_parent = RWXNode._registry.get(self._primary_parent_id) if self._primary_parent_id is not None else None
+        old_parent = self._graph[self._primary_parent_id] if self._primary_parent_id is not None else None
         if value is None:
             if old_parent is not None:
                 if self.id in old_parent._children_ids:
@@ -113,12 +123,21 @@ class RWXNode:
             if n is target:
                 return True
             for cid in n._children_ids:
-                stack.append(RWXNode._registry[cid])
+                try:
+                    stack.append(self._graph[cid])
+                except Exception:
+                    pass
         return False
 
     @property
     def children(self) -> List["RWXNode"]:
-        return [RWXNode._registry[cid] for cid in list(self._children_ids)]
+        result = []
+        for cid in list(self._children_ids):
+            try:
+                result.append(self._graph[cid])
+            except Exception:
+                pass
+        return result
 
     @property
     def descendants(self) -> List["RWXNode"]:
@@ -330,9 +349,11 @@ class SymbolicExpression(Generic[T], ABC):
         if value is not None and hasattr(value, '_child_'):
             value._child_ = self
 
-    def _render_tree_(self, use_dot: bool = True, show_in_console: bool = False):
+    def _render_tree_(self, use_dot: bool = True, show_in_console: bool = False,
+                      layout_engine: str = "dot", render_backend: str = "graphviz"):
         try:
-            render_tree(self._root_._node_, use_dot, view=use_dot, show_in_console=show_in_console)
+            render_tree(self._root_._node_, use_dot, view=use_dot, show_in_console=show_in_console,
+                        layout_engine=layout_engine, render_backend=render_backend)
         except Exception as e:
             logger.warning(f"render_tree is not available for RWXNode: {e}")
 

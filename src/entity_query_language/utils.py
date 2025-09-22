@@ -437,30 +437,49 @@ class FilteredDotExporter(object):
 def render_tree(root: Node, use_dot_exporter: bool = False,
                 filename: str = "query_tree", only_nodes: List[Node] = None, show_in_console: bool = False,
                 color_map: Optional[Callable[[Node], str]] = None,
-                view: bool = False) -> None:
+                view: bool = False, layout_engine: str = "dot", render_backend: str = "graphviz") -> None:
     """
-    Render the tree using the console and optionally export it to a dot file.
+    Render the tree/graph using console and optionally export it to an image file.
 
-    :param root: The root node of the tree.
-    :param use_dot_exporter: Whether to export the tree to a dot file.
-    :param filename: The name of the file to export the tree to.
-    :param only_nodes: A list of nodes to include in the dot export.
-    :param show_in_console: Whether to print the tree to the console.
-    :param color_map: A function that returns a color for certain nodes.
-    :param view: Whether to view the dot file in a viewer.
-    :param use_legend: Whether to show the legend or not.
+    :param root: The root node of the tree/graph.
+    :param use_dot_exporter: Whether to export using Graphviz/DOT (kept for backward-compat with anytree).
+    :param filename: The base file name for output files (without extension).
+    :param only_nodes: Limit export to these nodes (anytree only).
+    :param show_in_console: Whether to print a textual representation.
+    :param color_map: Function mapping a node to a color string.
+    :param view: Whether to open a viewer after generating (graphviz backend only).
+    :param layout_engine: Layout name. For graphviz: "dot", "neato", etc. For igraph: "tree", "kk", "fr", "sugiyama".
+    :param render_backend: "graphviz" (default) or "igraph" for python-igraph.
     """
     if not root:
         logger.warning("No nodes to render")
         return
-    if show_in_console:
-        for pre, _, node in RenderTree(root):
-            if only_nodes is not None and node not in only_nodes:
-                continue
-            print(f"{pre}{node.weight if hasattr(node, 'weight') and node.weight else ''} {node.__str__()}")
-    if use_dot_exporter:
-        unique_node_names = get_unique_node_names_func(root)
 
+    # Detect anytree.Node vs RWX-like node (duck-typing on children attr but not anytree.Node)
+    is_anytree = isinstance(root, Node)
+
+    if show_in_console:
+        if is_anytree:
+            for pre, _, node in RenderTree(root):
+                if only_nodes is not None and node not in only_nodes:
+                    continue
+                print(f"{pre}{getattr(node, 'weight', '') or ''} {node.__str__()}")
+        else:
+            # Simple DFS console render for RWX-like nodes
+            def dfs(n, depth=0, seen=None):
+                seen = seen or set()
+                if id(n) in seen:
+                    return
+                seen.add(id(n))
+                indent = ' ' * (depth * 2)
+                print(f"{indent}{getattr(n, 'weight', '') or ''} {n}")
+                for c in getattr(n, 'children', []):
+                    dfs(c, depth + 1, seen)
+            dfs(root)
+
+    # Graphviz path for anytree
+    if is_anytree and (render_backend == "graphviz" or use_dot_exporter):
+        unique_node_names = get_unique_node_names_func(root)
         de = FilteredDotExporter(root,
                                  include_nodes=only_nodes,
                                  nodenamefunc=unique_node_names,
@@ -478,6 +497,126 @@ def render_tree(root: Node, use_dot_exporter: bool = False,
                 de.to_picture(f"{filename}{'.svg'}")
             except FileNotFoundError as e:
                 logger.warning(f"{e}")
+        return
+
+    # For RWX-like graphs we support either igraph or graphviz
+    # Collect nodes and unique edges first
+    if not is_anytree:
+        nodes = []
+        edges = set()
+        seen = set()
+
+        def collect(n):
+            if id(n) in seen:
+                return
+            seen.add(id(n))
+            nodes.append(n)
+            for c in getattr(n, 'children', []):
+                # avoid duplicate edges
+                edge_key = (id(n), id(c))
+                if edge_key not in edges:
+                    edges.add(edge_key)
+                collect(c)
+
+        collect(root)
+
+        # igraph backend (optional)
+        if render_backend == "igraph":
+            try:
+                import igraph as ig
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"igraph is not installed; falling back to graphviz. Error: {e}")
+                render_backend = "graphviz"
+            else:
+                filename_base = filename or "query_tree"
+                # Build graph
+                g = ig.Graph(directed=True)
+                idx_map = {idn: i for i, idn in enumerate(map(id, nodes))}
+                g.add_vertices(len(nodes))
+                # Set vertex attributes
+                g.vs["label"] = [getattr(n, 'name', str(n)) for n in nodes]
+                g.vs["fillcolor"] = [getattr(n, 'color', 'white') for n in nodes]
+                # Add edges and labels
+                ig_edges = [(idx_map[a], idx_map[b]) for (a, b) in edges]
+                g.add_edges(ig_edges)
+                edge_labels = []
+                for (a, b) in edges:
+                    child_obj = next((x for x in nodes if id(x) == b), None)
+                    wt = getattr(child_obj, 'weight', None)
+                    edge_labels.append(str(wt) if wt is not None else "")
+                g.es["label"] = edge_labels
+                # Choose layout
+                layout = None
+                try:
+                    if layout_engine == "tree":
+                        root_idx = idx_map.get(id(root), 0)
+                        layout = g.layout_reingold_tilford(root=[root_idx])
+                    elif layout_engine in ("kk", "kamada_kawai"):
+                        layout = g.layout("kk")
+                    elif layout_engine in ("fr", "fruchterman_reingold"):
+                        layout = g.layout("fr")
+                    elif layout_engine == "sugiyama":
+                        layout = g.layout_sugiyama()
+                    else:
+                        layout = g.layout("kk")
+                except Exception:
+                    layout = g.layout("kk")
+                # Plot to SVG
+                try:
+                    ig.plot(g, target=f"{filename_base}.svg", layout=layout,
+                            vertex_label=g.vs["label"], edge_label=g.es["label"])  # type: ignore[arg-type]
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"igraph plot failed: {e}")
+                return
+
+        # Fallback or explicit graphviz backend for RWX
+        # Build DOT string
+        lines = ["digraph tree {"]
+        for n in nodes:
+            fill = getattr(n, 'color', 'white')
+            raw_label = getattr(n, 'name', str(n))
+            label = FilteredDotExporter.esc(raw_label)
+            lines.append(f'    "{id(n)}" [label="{label}", style=filled, fillcolor={fill}];')
+        for (a, b) in edges:
+            child_obj = next((x for x in nodes if id(x) == b), None)
+            edge_attrs = ''
+            wt = getattr(child_obj, 'weight', None)
+            if wt is not None:
+                wt_str = FilteredDotExporter.esc(str(wt))
+                edge_attrs = f' [style="bold", label=" {wt_str}"]'
+            lines.append(f'    "{a}" -> "{b}"{edge_attrs};')
+        lines.append("}")
+        dot_src = "\n".join(lines)
+
+        if Source is not None:
+            try:
+                src = Source(dot_src, filename=filename or "query_tree", engine=layout_engine)
+                if view:
+                    src.view()
+                else:
+                    # write .dot and .svg
+                    dot_path = f"{filename or 'query_tree'}.dot"
+                    with codecs.open(dot_path, 'w', 'utf-8') as f:
+                        f.write(dot_src)
+                    try:
+                        svg = src.pipe(format='svg')
+                        svg_path = f"{filename or 'query_tree'}.svg"
+                        with codecs.open(svg_path, 'w', 'utf-8') as f:
+                            f.write(svg.decode('utf-8') if isinstance(svg, (bytes, bytearray)) else svg)
+                    except Exception as e:
+                        logger.warning(f"graphviz render failed: {e}")
+            except Exception as e:
+                logger.warning(f"graphviz Source failed: {e}")
+        else:
+            # Fallback: write dot and try CLI engine
+            dot_path = f"{filename or 'query_tree'}.dot"
+            with codecs.open(dot_path, 'w', 'utf-8') as f:
+                f.write(dot_src)
+            try:
+                cmd = [layout_engine, dot_path, '-T', 'svg', '-o', f"{filename or 'query_tree'}.svg"]
+                check_call(cmd)
+            except Exception as e:
+                logger.warning(f"Failed external graphviz call: {e}")
 
 
 @dataclass(eq=False)
