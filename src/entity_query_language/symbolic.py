@@ -1006,12 +1006,17 @@ class Literal(Variable[T]):
     """
 
     def __init__(self, data: Any, name: Optional[str] = None, type_: Optional[Type] = None):
+        original_data = data
         if not is_iterable(data):
             data = HashedIterable([data])
         if not type_:
-            type_ = type(next(iter(data)))
+            first_value = next(iter(data), None)
+            type_ = type(first_value) if first_value else None
         if name is None:
-            name = type_.__name__
+            if type_:
+                name = type_.__name__
+            else:
+                name = type(original_data).__name__
         super().__init__(name, type_, _domain_source_=From(data))
 
 
