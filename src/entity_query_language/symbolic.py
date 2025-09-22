@@ -1017,7 +1017,7 @@ class Literal(Variable[T]):
                 name = type_.__name__
             else:
                 name = type(original_data).__name__
-        super().__init__(name, type_, _domain_source_=From(data))
+        super().__init__(name, type_, _domain_source_=From([data]))
 
 
 @dataclass(eq=False)
