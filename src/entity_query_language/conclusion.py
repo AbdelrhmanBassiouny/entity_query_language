@@ -53,20 +53,14 @@ class Conclusion(SymbolicExpression[T], ABC):
     def _reset_cache_(self) -> None:
         ...
 
-    @property
-    def _yield_when_false_(self) -> bool:
-        return False
-
-    @_yield_when_false_.setter
-    def _yield_when_false_(self, value):
-        ...
-
 
 @dataclass(eq=False)
 class Set(Conclusion[T]):
     """Set the value of a variable in the current solution binding."""
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None,
+                    yield_when_false: bool = False) -> Dict[int, HashedValue]:
+        self._yield_when_false_ = False
         if self.var._var_._id_ not in sources:
             parent_value = next(iter(self.var._evaluate__(sources)))[self.var._var_._id_]
             sources[self.var._var_._id_] = parent_value
@@ -78,7 +72,9 @@ class Set(Conclusion[T]):
 class Add(Conclusion[T]):
     """Add a new value to the domain of a variable."""
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None,
+                    yield_when_false: bool = False) -> Dict[int, HashedValue]:
+        self._yield_when_false_ = False
         v = next(iter(self.value._evaluate__(sources)))[self.value._id_]
         sources[self.var._var_._id_] = v
         return sources

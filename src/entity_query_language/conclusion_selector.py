@@ -71,16 +71,17 @@ class ExceptIf(ConclusionSelector):
             required_vars.update(conc._unique_variables_)
         return required_vars
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
         """
         Evaluate the ExceptIf condition and yield the results.
         """
 
         # init an empty source if none is provided
         sources = sources or HashedIterable()
+        self._yield_when_false_ = yield_when_false
 
         # constrain left values by available sources
-        left_values = self.left._evaluate__(sources)
+        left_values = self.left._evaluate__(sources, yield_when_false=self._yield_when_false_)
         for left_value in left_values:
 
             left_value.update(sources)
@@ -97,7 +98,7 @@ class ExceptIf(ConclusionSelector):
                 continue
 
             right_yielded = False
-            for right_value in self.right._evaluate__(left_value):
+            for right_value in self.right._evaluate__(left_value, yield_when_false=False):
                 right_yielded = True
                 self._conclusion_.update(self.right._conclusion_)
                 output = left_value.copy()
@@ -109,16 +110,6 @@ class ExceptIf(ConclusionSelector):
                 yield left_value
                 self._conclusion_.clear()
 
-    @property
-    def _yield_when_false_(self):
-        return super()._yield_when_false_
-
-    @_yield_when_false_.setter
-    def _yield_when_false_(self, value):
-        self._yield_when_false__ = value
-        self.left._yield_when_false_ = value
-        self.right._yield_when_false_ = False
-
 
 @dataclass(eq=False)
 class Alternative(ElseIf, ConclusionSelector):
@@ -128,8 +119,14 @@ class Alternative(ElseIf, ConclusionSelector):
     none of the branches are selected.
     """
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        outputs = super()._evaluate__(sources)
+    def _is_duplicate_output_(self, output: Dict[int, HashedValue]) -> bool:
+        # For alternatives, avoid suppressing outputs based solely on variable values,
+        # as different branches may yield different conclusions for the same bindings.
+        # Let ConclusionSelector.update_conclusion handle deduplication of conclusions.
+        return False
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
+        outputs = super()._evaluate__(sources, yield_when_false=yield_when_false)
         for output in outputs:
             left_is_true = not self.left._is_false_
             right_is_true = not self.right._is_false_
@@ -147,8 +144,8 @@ class Next(EQLUnion, ConclusionSelector):
     A Union conclusion selector that always evaluates the left and right branches and combines their results.
     """
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
-        outputs = super()._evaluate__(sources)
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
+        outputs = super()._evaluate__(sources, yield_when_false=yield_when_false)
         for output in outputs:
             if self.left_evaluated:
                 self.update_conclusion(output, self.left._conclusion_)
