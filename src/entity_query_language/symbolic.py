@@ -376,9 +376,8 @@ class SymbolicExpression(Generic[T], ABC):
         if not required_output:
             return False
         # Use a per-parent seen set to avoid suppressing outputs across different parent contexts
-        runtime_parent = getattr(self, "_eval_parent_", None)
-        parent_expr = runtime_parent or self._parent_
-        parent_id = parent_expr._id_ if parent_expr is not None else -1
+        parent_expr = self._eval_parent_ or self._parent_
+        parent_id = parent_expr._id_
         seen_by_truth = self._seen_parent_values_by_parent_.setdefault(parent_id, {True: SeenSet(), False: SeenSet()})
         seen_set = seen_by_truth[not self._is_false_]
         if seen_set.check(required_output):
@@ -679,11 +678,9 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = copy(original_v)
                     var_val = {var._id_: sol[var][var._id_] for var in selected_vars}
                     v.update(var_val)
-                    if (not self._child_) or (not self._is_duplicate_output_(v)):
-                        yield v
-            else:
-                if (not self._child_) or (not self._is_duplicate_output_(v)):
                     yield v
+            else:
+                yield v
 
     def _warn_on_unbound_variables_(self, sources: Dict[int, HashedValue],
                                     selected_vars: Iterable[CanBehaveLikeAVariable]):
@@ -1237,7 +1234,6 @@ class BinaryOperator(SymbolicExpression, ABC):
         self.left, self.right = self._update_children_(self.left, self.right)
         combined_vars = self.left._unique_variables_.union(self.right._unique_variables_)
         self._cache_.keys = [v.id_ for v in combined_vars.filter(lambda v: not isinstance(v.value, Literal))]
-        self._yield_when_false_ = False
 
     def yield_final_output_from_cache(self, variables_sources, cache: Optional[IndexedCache] = None) \
             -> Iterable[Dict[int, HashedValue]]:
@@ -1656,9 +1652,10 @@ def Not(operand: Any) -> SymbolicExpression:
     elif isinstance(operand, AND):
         operand = ElseIf(Not(operand.left), Not(operand.right))
     elif isinstance(operand, OR):
-        for child in operand.left._descendants_:
-            child._yield_when_false_ = False
-        operand.left._yield_when_false_ = False
+        if isinstance(operand, ElseIf):
+            for child in operand.left._descendants_:
+                child._yield_when_false_ = False
+            operand.left._yield_when_false_ = False
         operand = AND(Not(operand.left), Not(operand.right))
     else:
         operand._invert_ = True

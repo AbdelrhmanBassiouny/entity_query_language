@@ -393,7 +393,7 @@ def test_rule_tree_with_multiple_alternatives_predicate_form_too_much_joins(door
                          revolute_connection.world == world):
             Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
 
-    query._render_tree_()
+    # query._render_tree_()
 
     all_solutions = list(query.evaluate())
     print(f"\nCache Enter Count = {cache_enter_count.values}")
