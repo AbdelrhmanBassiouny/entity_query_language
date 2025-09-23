@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing
 from abc import ABC
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, Optional, Iterable
 
 from .cache_data import SeenSet, is_caching_enabled
@@ -49,6 +50,7 @@ class ExceptIf(ConclusionSelector):
     the left branch's conclusions/outputs are excluded; otherwise, left flows through.
     """
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
             child = self.left

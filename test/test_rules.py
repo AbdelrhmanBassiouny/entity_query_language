@@ -201,7 +201,7 @@ def test_rule_tree_with_an_alternative(doors_and_drawers_world):
     # query._render_tree_()
 
     all_solutions = list(query.evaluate())
-    assert len(all_solutions) == 4, "Should generate 2 drawers, 1 door and 1 wardrobe."
+    assert len(all_solutions) == 4, "Should generate 3 drawers, 1 door"
     assert isinstance(all_solutions[0], Drawer)
     assert all_solutions[0].handle.name == "Handle2"
     assert all_solutions[0].container.name == "Body2"

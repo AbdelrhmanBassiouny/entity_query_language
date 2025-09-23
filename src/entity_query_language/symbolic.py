@@ -4,6 +4,7 @@ from collections import UserDict, defaultdict
 from contextlib import contextmanager
 from copy import copy
 
+
 from . import logger
 from .enums import EQLMode, PredicateType
 
@@ -247,6 +248,7 @@ class SymbolicExpression(Generic[T], ABC):
     def _add_conclusion_(self, conclusion: Conclusion):
         self._conclusion_.add(conclusion)
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if self._parent_:
             vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
@@ -264,7 +266,9 @@ class SymbolicExpression(Generic[T], ABC):
 
     @property
     def _parent_(self) -> Optional[SymbolicExpression]:
-        if self._node_.parent is not None:
+        if self._eval_parent_ is not None:
+            return self._eval_parent_
+        elif self._node_.parent is not None:
             return self._node_.parent._expression_
         return None
 
@@ -366,8 +370,7 @@ class SymbolicExpression(Generic[T], ABC):
         if not required_output:
             return False
         # Use a per-parent seen set to avoid suppressing outputs across different parent contexts
-        parent_expr = self._eval_parent_ or self._parent_
-        parent_id = parent_expr._id_
+        parent_id = self._parent_._id_
         seen_by_truth = self._seen_parent_values_by_parent_.setdefault(parent_id, {True: SeenSet(), False: SeenSet()})
         seen_set = seen_by_truth[not self._is_false_]
         if seen_set.check(required_output):
@@ -500,6 +503,7 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         """
         ...
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         child = self._child_ if child is None else child
         if self._parent_:
@@ -555,6 +559,7 @@ class The(ResultQuantifier[T]):
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Dict[int, HashedValue]:
         sources = sources or {}
         self._yield_when_false_ = yield_when_false
+        self._child_._eval_parent_ = self
         sol_gen = self._child_._evaluate__(sources)
         result = None
         for sol in sol_gen:
@@ -587,17 +592,18 @@ class An(ResultQuantifier[T]):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[T]:
         sources = sources or {}
-        self._yield_when_false_ = yield_when_false
         if self._id_ in sources:
             if self is self._conditions_root_ or isinstance(self._parent_, LogicalOperator):
                 original_me = self._id_expression_map_[self._id_]
                 self._is_false_ = original_me._is_false_
-                if not original_me._is_false_ or self._yield_when_false_:
+                if not original_me._is_false_ or yield_when_false:
                     yield sources
             else:
                 yield sources
         else:
+            self._yield_when_false_ = yield_when_false
             any_yielded = False
+            self._child_._eval_parent_ = self
             values = self._child_._evaluate__(sources, yield_when_false=self._yield_when_false_)
             for value in values:
                 any_yielded = True
@@ -630,6 +636,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         if in_symbolic_mode(EQLMode.Rule):
             self.rule_mode = True
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         child = self._child_ if not child else child
         required_vars = self._parent_._required_variables_from_child_(self, when_true=when_true)
@@ -651,6 +658,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
             yield sources
         self._inform_selected_variables_that_they_should_be_inferred_()
         if self._child_:
+            self._child_._eval_parent_ = self
             child_values = self._child_._evaluate__(sources, yield_when_false=self._yield_when_false_)
         else:
             child_values = [{}]
@@ -665,7 +673,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = conclusion._evaluate__(v)
             self._warn_on_unbound_variables_(v, selected_vars)
             if selected_vars:
-                var_val_gen = {var: var._evaluate__(v, yield_when_false=self._yield_when_false_)
+                var_val_gen = {var: var._evaluate__(v)
                                for var in selected_vars}
                 original_v = v
                 for sol in generate_combinations(var_val_gen):
@@ -774,7 +782,7 @@ class Entity(QueryObjectDescriptor[T]):
             sol.update(sources)
             if self._yield_when_false_ or not self._is_false_:
                 if self.selected_variable:
-                    for var_val in self.selected_variable._evaluate__(sol, yield_when_false=self._yield_when_false_):
+                    for var_val in self.selected_variable._evaluate__(sol):
                         var_val.update(sol)
                         yield var_val
                 else:
@@ -1148,6 +1156,7 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) \
             -> Iterable[Dict[int, HashedValue]]:
         self._yield_when_false_ = yield_when_false
+        self._child_._eval_parent_ = self
         child_val = self._child_._evaluate__(sources, yield_when_false=self._yield_when_false_)
         for child_v in child_val:
             v = self._apply_mapping_(child_v[self._child_._id_])
@@ -1274,6 +1283,7 @@ class BinaryOperator(SymbolicExpression, ABC):
         """
         return self.left._all_variable_instances_ + self.right._all_variable_instances_
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
         if not child:
             child = self.left
@@ -1359,10 +1369,12 @@ class Comparator(BinaryOperator):
                 return
 
         first_operand, second_operand = self.get_first_second_operands(sources)
+        first_operand._eval_parent_ = self
         first_values = first_operand._evaluate__(sources)
         for first_value in first_values:
             first_value.update(sources)
             operand_value_map = {first_operand._id_: first_value[first_operand._id_]}
+            second_operand._eval_parent_ = self
             second_values = second_operand._evaluate__(first_value)
             for second_value in second_values:
                 operand_value_map[second_operand._id_] = second_value[second_operand._id_]
@@ -1452,8 +1464,6 @@ class AND(LogicalOperator):
                         output = copy(right_value)
                         output.update(left_value)
                         self._is_false_ = self.right._is_false_
-                        if self._is_false_ and self._is_duplicate_output_(output):
-                            continue
                         self.update_cache(right_value, self.right_cache)
                         yield output
                 finally:
@@ -1468,6 +1478,7 @@ class OR(LogicalOperator, ABC):
     A symbolic single choice operation that can be used to choose between multiple symbolic expressions.
     """
 
+    @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None,
                                         when_true: Optional[bool] = None):
         if not child:
