@@ -2,16 +2,23 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from textwrap import fill
 from typing import ClassVar, Optional, List, Dict, Tuple
 
-import igraph as ig
-import matplotlib as mpl
+try:
+    from textwrap import fill
+    import igraph as ig
+    import matplotlib as mpl
+    from matplotlib import pyplot as plt
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+    from matplotlib.path import Path
+except ImportError:
+    fill = None
+    ig = None
+    mpl = None
+
 import numpy as np
 import rustworkx as rx
-from matplotlib import pyplot as plt
-from matplotlib.patches import FancyArrowPatch
-from matplotlib.path import Path
+
 from typing_extensions import Any
 
 
@@ -29,6 +36,11 @@ class RWXNode:
     data: Optional[Any] = field(default=None)
     _primary_parent_id: Optional[int] = None
     color: ColorLegend = field(default_factory=ColorLegend)
+    # Grouping/boxing options
+    wrap_subtree: bool = field(default=False)
+    wrap_facecolor: Optional[str] = field(default=None)
+    wrap_edgecolor: Optional[str] = field(default=None)
+    wrap_alpha: float = field(default=0.08)
     id_: int = field(init=False)
     _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
 
@@ -107,63 +119,6 @@ class RWXNode:
             n = n.parent
         return n
 
-    def _convert_to_igraph(self):
-        """Convert rustworkx graph to igraph for layout computation.
-        Ensures vertex IDs are contiguous as required by igraph by remapping
-        rustworkx node IDs to a compact range.
-        Returns an igraph graph and the list of nodes in the igraph vertex order.
-        """
-        # Create igraph
-        g_ig = ig.Graph(directed=True)
-
-        # Build a stable ordering of nodes based on their rustworkx IDs
-        rx_nodes = list(self._graph.nodes())
-        ordered_nodes = sorted(rx_nodes, key=lambda n: n.id)
-        node_names = [n.name for n in ordered_nodes]
-
-        # Add vertices in this order
-        g_ig.add_vertices(node_names)
-
-        # Map rustworkx IDs to igraph consecutive IDs
-        id_map = {n.id: idx for idx, n in enumerate(ordered_nodes)}
-
-        # Add edges with default weights, remapping endpoints
-        edges = []
-        weights = []
-        for (u, v) in self._graph.edge_list():
-            if u in id_map and v in id_map:
-                edges.append((id_map[u], id_map[v]))
-                weights.append(1)
-        if edges:
-            g_ig.add_edges(edges)
-            g_ig.es['weight'] = weights
-
-        return g_ig, ordered_nodes
-
-    def compute_optimal_layout(self, layout_algorithm="drl", iterations=500):
-        """Use igraph's advanced layout algorithms to minimize edge crossings.
-        Returns a tuple: (positions ndarray, ordered_nodes list)
-        where ordered_nodes is the vertex order used for positions.
-        """
-        g_ig, ordered_nodes = self._convert_to_igraph()
-
-        layout_algorithms = {
-            "drl": g_ig.layout_drl,
-            "fr": g_ig.layout_fruchterman_reingold,
-            "kk": g_ig.layout_kamada_kawai,
-            "lgl": g_ig.layout_lgl,
-            "graphopt": g_ig.layout_graphopt,
-        }
-
-        if layout_algorithm in layout_algorithms:
-            # Use default parameters for compatibility across igraph versions
-            layout = layout_algorithms[layout_algorithm]()
-        else:
-            # Default to DRL (Distributed Recursive Layout)
-            layout = g_ig.layout_drl()
-
-        return np.array(layout.coords), ordered_nodes
-
     def __str__(self):
         return self.name
 
@@ -182,6 +137,8 @@ class RWXNode:
                       'straight' for straight segments, or 'orthogonal' for L-shaped right-angled polylines.
         - label_max_chars_per_line: cap for wrapping long node labels; smaller values force more lines. Use None to disable the cap.
         """
+        if not ig or not mpl or not fill:
+            raise RuntimeError("igraph, matplotlib, textwrap must be installed to visualize the graph.")
         # 1) Build the rooted subgraph starting from the logical root
         root = self.root
         sub_nodes = [root] + root.descendants
@@ -479,6 +436,52 @@ class RWXNode:
         prev_ortho_segments: List[Tuple[str, float, float, float, float, int, int]] = []
         # Registry of bump centers to avoid duplicate bumps; store as pixel-quantized coordinates
         bump_registry: set = set()  # entries like ('h' or 'v', qx, qy)
+
+        # 7.5) Draw transparent wrapping boxes for nodes marked to wrap their subtree
+        wrap_roots = [n for n in ordered_nodes if getattr(n, 'wrap_subtree', False)]
+        if wrap_roots:
+            # Additional padding for the box in pixels -> data units
+            box_pad_px = 12.0
+            pad_dx = dx_per_px * box_pad_px
+            pad_dy = dy_per_px * box_pad_px
+            for r in wrap_roots:
+                # Collect indices of r and its descendants that are in this plotted subgraph
+                ids_in_subtree = {r.id}
+                def wrap_children(node):
+                    for child in node.children:
+                        if child.wrap_subtree:
+                            continue
+                        ids_in_subtree.add(child.id)
+                        if child.children:
+                            wrap_children(child)
+                wrap_children(r)
+                idxs = [id_map[nid] for nid in ids_in_subtree if nid in id_map]
+                if not idxs:
+                    continue
+                # Use already-inflated obstacle rectangles for node footprint extents
+                xs_min = min(obstacles_rects[k][0] for k in idxs) - pad_dx
+                xs_max = max(obstacles_rects[k][1] for k in idxs) + pad_dx
+                ys_min = min(obstacles_rects[k][2] for k in idxs) - pad_dy
+                ys_max = max(obstacles_rects[k][3] for k in idxs) + pad_dy
+                # Clamp to axes limits (still allow small overflow)
+                xs_min = max(0.0, xs_min)
+                ys_min = max(0.0, ys_min)
+                xs_max = min(x_extent, xs_max)
+                ys_max = min(y_extent, ys_max)
+                width = max(1e-6, xs_max - xs_min)
+                height = max(1e-6, ys_max - ys_min)
+                fc = r.wrap_facecolor if r.wrap_facecolor else (r.color.color if r.color else '#cccccc')
+                ec = r.wrap_edgecolor if r.wrap_edgecolor else (r.color.color if r.color else '#666666')
+                alpha_box = float(getattr(r, 'wrap_alpha', 0.08))
+                box = FancyBboxPatch((xs_min, ys_min), width, height,
+                                     boxstyle='round,pad=0.01',
+                                     linewidth=2.0,
+                                     edgecolor=ec,
+                                     facecolor=fc,
+                                     alpha=alpha_box,
+                                     zorder=0.5,
+                                     clip_on=False)
+                ax.add_patch(box)
 
         for idx, (u, v) in enumerate(edges):
             x0, y0 = norm_pos[u, 0], norm_pos[u, 1]

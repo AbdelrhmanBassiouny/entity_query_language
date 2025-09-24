@@ -492,6 +492,10 @@ class The(ResultQuantifier[T]):
 class An(ResultQuantifier[T]):
     """Quantifier that yields all matching results one by one."""
 
+    def __post_init__(self):
+        super().__post_init__()
+        self._node_.wrap_subtree = True
+
     def evaluate(self) -> Iterable[TypingUnion[T, Dict[TypingUnion[T, SymbolicExpression[T]], T]]]:
         with symbolic_mode(mode=None):
             results = self._evaluate__()
@@ -702,6 +706,7 @@ class Infer(An[T]):
         super().__post_init__()
         for v in self._child_.selected_variables:
             v._is_inferred_ = True
+        self._node_.wrap_subtree = False
 
     @property
     def _plot_color_(self) -> ColorLegend:
