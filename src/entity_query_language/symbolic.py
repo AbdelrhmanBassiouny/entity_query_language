@@ -7,6 +7,7 @@ from copy import copy
 
 from . import logger
 from .enums import EQLMode, PredicateType
+from .rxnode import RWXNode, ColorLegend
 
 """
 Core symbolic expression system used to build and evaluate entity queries.
@@ -21,95 +22,10 @@ from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-import rustworkx as rx
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
                                Generic, TypeVar, TYPE_CHECKING)
 from typing_extensions import List, Tuple, Callable
 
-# ---- rustworkx-backed node wrapper to mimic needed anytree.Node API ----
-class RWXNode:
-    _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
-
-    def __init__(self, name: str):
-        self.name = name
-        self.weight = None
-        self._expression_ = None  # will be set by SymbolicExpression
-        self._primary_parent_id: Optional[int] = None
-        # store self as node data to keep a 1:1 mapping
-        self.id: int = self._graph.add_node(self)
-        self.color = "white"
-
-    # Non-primary connect: add edge without changing primary parent pointer
-    def add_parent(self, parent: "RWXNode", edge_weight=None):
-        # Avoid self-loops
-        if parent is self:
-            return
-        # Do not add duplicate edges between the same two nodes
-        if self._graph.has_edge(parent.id, self.id):
-            return
-        # Avoid creating cycles: PyDAG will raise if creates a cycle
-        self._graph.add_edge(parent.id, self.id, edge_weight if edge_weight is not None else self.weight)
-
-    def remove(self):
-        self._graph.remove_node(self.id)
-
-    def remove_node(self, node: RWXNode):
-        self._graph.remove_node(node.id)
-
-    def remove_child(self, child: RWXNode):
-        child.remove_parent(self)
-
-    def remove_parent(self, parent: RWXNode):
-        self._graph.remove_edge(parent.id, self.id)
-
-    @property
-    def ancestors(self) -> List[RWXNode]:
-        node_ids = rx.ancestors(self._graph, self.id)
-        return [self._graph[n_id] for n_id in node_ids]
-
-    @property
-    def parents(self)-> List[RWXNode]:
-        return self._graph.predecessors(self.id)
-
-    @property
-    def parent(self) -> Optional["RWXNode"]:
-        if self._primary_parent_id is None:
-            return None
-        return self._graph[self._primary_parent_id]
-
-    @parent.setter
-    def parent(self, value: Optional["RWXNode"]):
-        if value is None:
-            # detach current parent
-            self._graph.remove_edge(self._primary_parent_id, self.id)
-            self._primary_parent_id = None
-            return
-        # Create edge and set as primary (no need to detach non-primary edges)
-        self.add_parent(value)
-        self._primary_parent_id = value.id
-
-    @property
-    def children(self) -> List["RWXNode"]:
-        return self._graph.successors(self.id)
-
-    @property
-    def descendants(self) -> List["RWXNode"]:
-        desc_ids = rx.descendants(self._graph, self.id)
-        return [self._graph[nid] for nid in desc_ids]
-
-    @property
-    def leaves(self) -> List["RWXNode"]:
-        return [n for n in [self] + self.descendants if self._graph.out_degree(n.id) == 0]
-
-    @property
-    def root(self) -> "RWXNode":
-        n = self
-        while n.parent is not None:
-            n = n.parent
-        return n
-
-    def __str__(self):
-        return self.name
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache, get_cache_keys_for_class_, yield_class_values_from_cache
@@ -174,12 +90,12 @@ class SymbolicExpression(Generic[T], ABC):
                                                       init=False)
     _seen_parent_values_by_parent_: Dict[int, Dict[bool, SeenSet]] = field(default_factory=dict, init=False)
     _eval_parent_: Optional[SymbolicExpression] = field(default=None, init=False, repr=False)
+    _plot_color__: Optional[ColorLegend] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if not self._id_:
             self._id_ = id_generator(self)
-            node_name = self._name_ + f"_{self._id_}"
-            self._create_node_(node_name)
+            self._create_node_()
             self._id_expression_map_[self._id_] = self
         if hasattr(self, "_child_") and self._child_ is not None:
             self._update_child_()
@@ -198,27 +114,8 @@ class SymbolicExpression(Generic[T], ABC):
             v._node_.parent = self._node_
         return tuple(children.values())
 
-    def _copy_child_expression_(self, child: Optional[SymbolicExpression] = None) -> SymbolicExpression:
-        if child is None:
-            child = self._child_
-        child_cp = child._copy_expression_(f"_{self._id_}")
-        return child_cp
-
-    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
-        cp = self.__new__(self.__class__)
-        cp.__dict__.update(self.__dict__)
-        cp._reset_only_my_cache_()
-        cp._create_node_(f"{self._node_.name}_{postfix}")
-        for c in self._children_:
-            c_cp = c._copy_expression_(postfix)
-            c_cp._node_.parent = cp._node_
-        if hasattr(self, "_child_") and self._child_ is not None:
-            cp._child_ = [c for c in cp._children_ if c._id_ == self._child_._id_][0]
-        return cp
-
-    def _create_node_(self, name: str):
-        self._node_ = RWXNode(name)
-        self._node_._expression_ = self
+    def _create_node_(self):
+        self._node_ = RWXNode(self._name_, data=self, color=self._plot_color_)
 
     def _reset_cache_(self) -> None:
         """
@@ -269,7 +166,7 @@ class SymbolicExpression(Generic[T], ABC):
         if self._eval_parent_ is not None:
             return self._eval_parent_
         elif self._node_.parent is not None:
-            return self._node_.parent._expression_
+            return self._node_.parent.data
         return None
 
     @_parent_.setter
@@ -303,7 +200,7 @@ class SymbolicExpression(Generic[T], ABC):
         """
         Get the root of the symbolic expression tree.
         """
-        return self._node_.root._expression_
+        return self._node_.root.data
 
     @property
     @abstractmethod
@@ -320,11 +217,11 @@ class SymbolicExpression(Generic[T], ABC):
 
     @property
     def _descendants_(self) -> List[SymbolicExpression]:
-        return [d._expression_ for d in self._node_.descendants]
+        return [d.data for d in self._node_.descendants]
 
     @property
     def _children_(self) -> List[SymbolicExpression]:
-        return [c._expression_ for c in self._node_.children]
+        return [c.data for c in self._node_.children]
 
     @classmethod
     def _current_parent_(cls) -> Optional[SymbolicExpression]:
@@ -334,7 +231,7 @@ class SymbolicExpression(Generic[T], ABC):
 
     @property
     def _sources_(self):
-        vars = [v._expression_ for v in self._node_.leaves]
+        vars = [v.data for v in self._node_.leaves]
         while any(isinstance(v, SymbolicExpression) for v in vars):
             vars = {v._domain_source_.domain if isinstance(v, Variable) and v._domain_source_ else v for v in vars}
             for v in copy(vars):
@@ -379,6 +276,15 @@ class SymbolicExpression(Generic[T], ABC):
             seen_set.add(required_output)
             return False
 
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return self._plot_color__
+
+    @_plot_color_.setter
+    def _plot_color_(self, value: ColorLegend):
+        self._plot_color__ = value
+        self._node_.color = value
+
     def __and__(self, other):
         return AND(self, other)
 
@@ -402,13 +308,7 @@ class SymbolicExpression(Generic[T], ABC):
         return hash(id(self))
 
     def __repr__(self):
-        try:
-            return self._name_
-        except Exception:
-            # Fallback safe repr that doesn't traverse recursive fields
-            cls = self.__class__.__name__
-            _id = getattr(self, "_id_", None)
-            return f"{cls}#{_id if _id is not None else 'NA'}"
+        return self._name_
 
 
 @dataclass(eq=False)
@@ -533,6 +433,15 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         else:
             raise NotImplementedError(f"Unknown child type {type(self._child_)}")
 
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("ResultQuantifier", '#9467bd')
+
+    @_plot_color_.setter
+    def _plot_color_(self, value: ColorLegend):
+        self._plot_color__ = value
+        self._node_.color = value
+
 
 class UnificationDict(UserDict):
     """
@@ -635,6 +544,8 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         super().__post_init__()
         if in_symbolic_mode(EQLMode.Rule):
             self.rule_mode = True
+        for variable in self.selected_variables:
+            variable._plot_color_ = ColorLegend("SelectedVariable", self._plot_color_.color)
 
     @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
@@ -726,10 +637,13 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
     def __repr__(self):
         return self._name_
 
-    # def __copy__(self):
-    #     cp = super().__copy__()
-    #     cp.selected_variables = [copy(var) if var is not self else cp for var in self.selected_variables]
-    #     return cp
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("QueryObjectDescriptor", '#d62728')
+
+    @property
+    def _name_(self) -> str:
+        return f"({', '.join(var._name_ for var in self.selected_variables)})"
 
 
 @dataclass(eq=False)
@@ -737,10 +651,6 @@ class SetOf(QueryObjectDescriptor[T]):
     """
     A query over a set of variables.
     """
-
-    @property
-    def _name_(self) -> str:
-        return f"SetOf({', '.join(var._name_ for var in self.selected_variables)})"
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
         self._yield_when_false_ = yield_when_false
@@ -770,10 +680,6 @@ class Entity(QueryObjectDescriptor[T]):
     def selected_variable(self):
         return self.selected_variables[0] if self.selected_variables else None
 
-    @property
-    def _name_(self) -> str:
-        return f"{self.__class__.__name__}(\"{self.selected_variable._name_ if self.selected_variable else ''}\")"
-
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[T]:
         self._yield_when_false_ = yield_when_false
         selected_variables = [self.selected_variable] if self.selected_variable else []
@@ -796,6 +702,10 @@ class Infer(An[T]):
         super().__post_init__()
         for v in self._child_.selected_variables:
             v._is_inferred_ = True
+
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("Infer", '#EAC9FF')
 
 
 @dataclass
@@ -962,7 +872,7 @@ class Variable(CanBehaveLikeAVariable[T]):
         for child in self._node_.children:
             self._node_.remove_child(child)
         for parent in parents:
-            new_expression._parent_ = parent._expression_
+            new_expression._parent_ = parent.data
             self._node_.remove_parent(parent)
         self._node_.remove()
         self._node_ = new_expression._node_
@@ -1096,14 +1006,17 @@ class Variable(CanBehaveLikeAVariable[T]):
             variables.extend(v._all_variable_instances_)
         return variables
 
-    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
-        cp = super()._copy_expression_(postfix)
-        if self._child_vars_:
-            child_var_id_key_map = {v._id_: k for k, v in self._child_vars_.items()}
-            for c in cp._children_:
-                if c._id_ in child_var_id_key_map:
-                    cp._child_vars_[child_var_id_key_map[c._id_]] = c
-        return cp
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        if self._plot_color__:
+            return self._plot_color__
+        else:
+            return ColorLegend("Variable", "cornflowerblue")
+
+    @_plot_color_.setter
+    def _plot_color_(self, value: ColorLegend):
+        self._plot_color__ = value
+        self._node_.color = value
 
     def __iter__(self):
         for v in self._domain_:
@@ -1133,6 +1046,13 @@ class Literal(Variable[T]):
             else:
                 name = type(original_data).__name__
         super().__init__(name, type_, _domain_source_=From(data))
+
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        if self._plot_color__:
+            return self._plot_color__
+        else:
+            return ColorLegend("Literal", "#949292")
 
 
 @dataclass(eq=False)
@@ -1175,6 +1095,13 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
         """
         pass
 
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        if self._plot_color__:
+            return self._plot_color__
+        else:
+            return ColorLegend("DomainMapping (Attribute, Callable, Indexing)", "#8FC7B8")
+
 
 @dataclass(eq=False)
 class Attribute(DomainMapping):
@@ -1188,7 +1115,7 @@ class Attribute(DomainMapping):
 
     @property
     def _name_(self):
-        return f"{self._child_._name_}.{self._attr_name_}"
+        return f"{self._child_._var_._name_}.{self._attr_name_}"
 
 
 @dataclass(eq=False)
@@ -1203,7 +1130,7 @@ class Index(DomainMapping):
 
     @property
     def _name_(self):
-        return f"{self._child_._name_}[{self._key_}]"
+        return f"{self._child_._var_._name_}[{self._key_}]"
 
 
 @dataclass(eq=False)
@@ -1222,7 +1149,7 @@ class Call(DomainMapping):
 
     @property
     def _name_(self):
-        return f"{self._child_._name_}()"
+        return f"{self._child_._var_._name_}()"
 
 
 @dataclass(eq=False)
@@ -1297,12 +1224,6 @@ class BinaryOperator(SymbolicExpression, ABC):
             required_vars.update(self._parent_._required_variables_from_child_(self, when_true))
         return required_vars
 
-    def _copy_expression_(self, postfix: str) -> SymbolicExpression:
-        cp = super()._copy_expression_(postfix)
-        cp.left = [c for c in cp._children_ if c._id_ == self.left._id_][0]
-        cp.right = [c for c in cp._children_ if c._id_ == self.right._id_][0]
-        return cp
-
 
 @dataclass(eq=False)
 class Comparator(BinaryOperator):
@@ -1313,6 +1234,12 @@ class Comparator(BinaryOperator):
     right: CanBehaveLikeAVariable
     operation: Callable[[Any, Any], bool]
     _invert__: bool = field(init=False, default=False)
+    operation_name_map: ClassVar[Dict[Any, str]] = {operator.eq: "==",
+                                                    operator.ne: "!=",
+                                                    operator.lt: "<",
+                                                    operator.le: "<=",
+                                                    operator.gt: ">",
+                                                    operator.ge: ">="}
 
     @property
     def _invert_(self):
@@ -1348,6 +1275,8 @@ class Comparator(BinaryOperator):
 
     @property
     def _name_(self):
+        if self.operation in self.operation_name_map:
+            return self.operation_name_map[self.operation]
         return self.operation.__name__
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
@@ -1403,6 +1332,10 @@ class Comparator(BinaryOperator):
         return HashedIterable(values={self.left._var_._id_: left_leaf_value,
                                       self.right._var_._id_: right_leaf_value})
 
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("Comparator", '#ff7f0e')
+
 
 @dataclass(eq=False)
 class LogicalOperator(BinaryOperator, ABC):
@@ -1420,6 +1353,10 @@ class LogicalOperator(BinaryOperator, ABC):
     @property
     def _name_(self):
         return self.__class__.__name__
+
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("LogicalOperator", '#2ca02c')
 
 
 @dataclass(eq=False)

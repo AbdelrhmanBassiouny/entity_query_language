@@ -10,6 +10,7 @@ from typing_extensions import Any, Optional, List
 
 from .enums import RDREdge
 from .hashed_data import HashedValue
+from .rxnode import ColorLegend
 from .symbolic import SymbolicExpression, T, Variable, Attribute
 
 
@@ -48,10 +49,14 @@ class Conclusion(SymbolicExpression[T], ABC):
     @property
     def _name_(self) -> str:
         value_str = self.value._type_.__name__ if isinstance(self.value, Variable) else str(self.value)
-        return f"{self.__class__.__name__}({self.var._name_}, {value_str})"
+        return f"{self.__class__.__name__}({self.var._var_._name_}, {value_str})"
 
     def _reset_cache_(self) -> None:
         ...
+
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("Conclusion", "#8cf2ff")
 
 
 @dataclass(eq=False)

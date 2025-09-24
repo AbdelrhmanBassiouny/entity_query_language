@@ -1,0 +1,50 @@
+from matplotlib import pyplot as plt
+
+from .datasets import Drawer, Handle, FixedConnection, Body, Container, PrismaticConnection, RevoluteConnection, View, \
+    Door, Wardrobe
+from entity_query_language import entity, rule_mode, infer, HasType, symbolic_mode, Add, alternative
+
+
+def test_render_rx_graph_as_igraph_simple(handles_and_containers_world):
+    world = handles_and_containers_world
+    with rule_mode():
+        fixed_connection = FixedConnection(world=world)
+        container = fixed_connection.parent
+        handle = fixed_connection.child
+        rule = infer(entity(Drawer(handle=handle, container=container, world=world),
+                               HasType(handle, Handle)))
+    drawers = list(rule.evaluate())
+    rule._node_.visualize()
+    plt.show()
+
+
+def test_render_rx_graph_as_igraph_complex(doors_and_drawers_world):
+    world = doors_and_drawers_world
+    with symbolic_mode():
+        body = Body(world=world)
+        handle = Handle(world=world)
+        container = Container(world=world)
+        fixed_connection = FixedConnection(parent=body, child=handle, world=world)
+        prismatic_connection = PrismaticConnection(child=body, world=world)
+        revolute_connection = RevoluteConnection(parent=body, child=handle, world=world)
+        rule = infer(views := View(), fixed_connection, prismatic_connection)
+
+    with rule_mode(rule):
+        Add(views, Drawer(handle=handle, container=body, world=world))
+        with alternative(revolute_connection):
+            Add(views, Door(handle=handle, body=body, world=world))
+        with alternative(fixed_connection,
+                         body == revolute_connection.child,
+                         container == revolute_connection.parent,
+                         revolute_connection.world == world):
+            Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
+    results = list(rule.evaluate())
+
+    # rule._render_tree_()
+    rule._node_.visualize((80, 80), node_size=7000, font_size=25, label_max_chars_per_line=13,
+                          edge_style="orthogonal")
+    filename = "pdf_graph.pdf"
+    dpi = 300
+    plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight')
+    print(f"Saved as {filename} - can be zoomed infinitely!")
+

@@ -9,6 +9,7 @@ from typing import Dict, Optional, Iterable
 from .cache_data import SeenSet, is_caching_enabled
 from .conclusion import Conclusion
 from .hashed_data import HashedIterable, HashedValue
+from .rxnode import ColorLegend
 from .symbolic import LogicalOperator, SymbolicExpression, ElseIf, Union as EQLUnion, Literal
 
 
@@ -39,6 +40,10 @@ class ConclusionSelector(LogicalOperator, ABC):
         cp = super()._copy_expression_(postfix)
         cp.concluded_before = {True: SeenSet(), False: SeenSet()}
         return cp
+
+    @property
+    def _plot_color_(self) -> ColorLegend:
+        return ColorLegend("ConclusionSelector", '#eded18')
 
 
 @dataclass(eq=False)
