@@ -122,9 +122,9 @@ class RWXNode:
     def __str__(self):
         return self.name
 
-    def visualize(self, figsize=(30, 20), node_size=2000, font_size=10, spacing_x: float = 4, spacing_y: float = 4,
-                  curve_scale: float = 0.5, layout: str = 'tidy', edge_style: str = 'spline',
-                  label_max_chars_per_line: Optional[int] = 16):
+    def visualize(self, figsize=(80, 80), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
+                  curve_scale: float = 0.5, layout: str = 'tidy', edge_style: str = 'orthogonal',
+                  label_max_chars_per_line: Optional[int] = 13):
         """Render a rooted, top-to-bottom directed graph (DAG-like), emphasizing
         flow from the root at the top to leaves at the bottom. Nodes are spread
         per layer with barycentric ordering to reduce crossings, and node sizes
@@ -438,7 +438,7 @@ class RWXNode:
         bump_registry: set = set()  # entries like ('h' or 'v', qx, qy)
 
         # 7.5) Draw transparent wrapping boxes for nodes marked to wrap their subtree
-        wrap_roots = [n for n in ordered_nodes if getattr(n, 'wrap_subtree', False)]
+        wrap_roots = [n for n in ordered_nodes if n.wrap_subtree if n is not n.root]
         if wrap_roots:
             # Additional padding for the box in pixels -> data units
             box_pad_px = 12.0
@@ -1246,4 +1246,7 @@ class RWXNode:
         ax.set_xticks([])
         ax.set_yticks([])
         plt.tight_layout()
+        filename = "pdf_graph.pdf"
+        dpi = 300
+        plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight')
         return fig, ax
