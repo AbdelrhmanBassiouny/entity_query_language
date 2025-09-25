@@ -1040,6 +1040,7 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
         if self._id_ in sources:
             yield sources
             return
@@ -1147,17 +1148,23 @@ class Merge(CanBehaveLikeAVariable[T]):
         self._var_ = self
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
         if self._id_ in sources:
             yield sources
             return
-        all_values = []
-        child_val = self._child_._evaluate__(sources)
-        for child_v in child_val:
-            child_v_unwrapped = child_v[self._child_._id_].value
-            if not is_iterable(child_v_unwrapped):
-                child_v_unwrapped = [child_v_unwrapped]
-            all_values.extend(child_v_unwrapped)
-        yield {self._id_: HashedValue(all_values), **sources}
+        all_values = defaultdict(list)
+        for child_v in self._child_._evaluate__(sources):
+            child_v = copy(child_v)
+            for id_, val in child_v.items():
+                if id_ == self._child_._id_:
+                    child_v_unwrapped = val.value
+                    if not is_iterable(child_v_unwrapped):
+                        child_v_unwrapped = [child_v_unwrapped]
+                    all_values[self._id_].extend(child_v_unwrapped)
+                all_values[id_].append(val)
+            for s_id, s_val in sources.items():
+                all_values[s_id].append(s_val)
+        yield {k: HashedValue(v) for k, v in all_values.items()}
 
     @property
     def _name_(self):
