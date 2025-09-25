@@ -9,7 +9,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tup
 
 from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
                        chained_logic, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode,
-                       Variable, Infer, _optimize_or)
+                       Variable, Infer, _optimize_or, Flatten, Merge)
 from .predicate import Predicate, symbols_registry
 
 T = TypeVar('T')  # Define type variable "T"
@@ -225,3 +225,20 @@ def in_(item, container):
     :rtype: Comparator
     """
     return Comparator(container, item, operator.contains)
+
+
+def flatten(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBehaveLikeAVariable[T], Iterable[T]]:
+    """
+    Flatten a nested iterable domain into individual items while preserving the parent bindings.
+    This returns a DomainMapping that, when evaluated, yields one solution per inner element
+    (similar to SQL UNNEST), keeping existing variable bindings intact.
+    """
+    return Flatten(var)
+
+
+def merge(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBehaveLikeAVariable[T], Iterable[T]]:
+    """
+    Merge a nested iterable domain into a one element domain that is still a nested iterable that contains all
+    the values of the sub iterables.
+    """
+    return Merge(var)

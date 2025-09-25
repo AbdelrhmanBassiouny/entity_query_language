@@ -95,6 +95,7 @@ class Drawer(View):
         return self.handle == other.handle and self.container == other.container and self.world == other.world
 
 
+@symbol
 @dataclass
 class Cabinet(View):
     container: Container

@@ -1,4 +1,4 @@
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 
 import logging
 
@@ -6,7 +6,7 @@ logger = logging.Logger("eql")
 logger.setLevel(logging.INFO)
 
 from .entity import (entity, a, an, let, the, set_of,
-                     and_, or_, not_, contains, in_, infer)
+                     and_, or_, not_, contains, in_, infer, flatten, merge)
 from .rule import refinement, alternative
 from .symbolic import symbolic_mode, From, rule_mode
 from .predicate import predicate, symbol, Predicate, HasType

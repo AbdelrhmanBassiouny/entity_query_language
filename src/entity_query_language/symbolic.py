@@ -1036,24 +1036,27 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return self._child_._all_variable_instances_ if not isinstance(self._child_, Variable) \
-            else [self._child_]
+        return self._child_._all_variable_instances_
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) \
             -> Iterable[Dict[int, HashedValue]]:
+        if self._id_ in sources:
+            yield sources
+            return
         child_val = self._child_._evaluate__(sources)
         for child_v in child_val:
-            v = self._apply_mapping_(child_v[self._child_._id_])
-            if (not self._invert_ and v.value) or (self._invert_ and not v.value):
-                self._is_false_ = False
-            else:
-                self._is_false_ = True
-            if self._yield_when_false_ or not self._is_false_:
-                child_v[self._id_] = v
-                yield child_v
+            for v in self._apply_mapping_(child_v[self._child_._id_]):
+                values = copy(child_v)
+                if (not self._invert_ and v.value) or (self._invert_ and not v.value):
+                    self._is_false_ = False
+                else:
+                    self._is_false_ = True
+                if self._yield_when_false_ or not self._is_false_:
+                    values[self._id_] = v
+                    yield values
 
     @abstractmethod
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
         """
         Apply the domain mapping to a symbolic value.
         """
@@ -1067,8 +1070,8 @@ class Attribute(DomainMapping):
     """
     _attr_name_: str
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
-        return HashedValue(id_=value.id_, value=getattr(value.value, self._attr_name_))
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        yield HashedValue(id_=value.id_, value=getattr(value.value, self._attr_name_))
 
     @property
     def _name_(self):
@@ -1082,8 +1085,8 @@ class Index(DomainMapping):
     """
     _key_: Any
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
-        return HashedValue(id_=value.id_, value=value.value[self._key_])
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        yield HashedValue(id_=value.id_, value=value.value[self._key_])
 
     @property
     def _name_(self):
@@ -1098,15 +1101,73 @@ class Call(DomainMapping):
     _args_: Tuple[Any, ...] = field(default_factory=tuple)
     _kwargs_: Dict[str, Any] = field(default_factory=dict)
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
         if len(self._args_) > 0 or len(self._kwargs_) > 0:
-            return HashedValue(id_=value.id_, value=value.value(*self._args_, **self._kwargs_))
+            yield HashedValue(id_=value.id_, value=value.value(*self._args_, **self._kwargs_))
         else:
-            return HashedValue(id_=value.id_, value=value.value())
+            yield HashedValue(id_=value.id_, value=value.value())
 
     @property
     def _name_(self):
         return f"{self._child_._name_}()"
+
+
+@dataclass(eq=False)
+class Flatten(DomainMapping):
+    """
+    Domain mapping that flattens an iterable-of-iterables into a single iterable of items.
+
+    Given a child expression that evaluates to an iterable (e.g., Views.bodies), this mapping yields
+    one solution per inner element while preserving the original bindings (e.g., the View instance),
+    similar to UNNEST in SQL.
+    """
+
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        inner = value.value
+        # Treat non-iterables as singletons
+        if not is_iterable(inner):
+            inner_iter = [inner]
+        else:
+            inner_iter = inner
+        for inner_v in inner_iter:
+            yield HashedValue(inner_v)
+
+    @property
+    def _name_(self):
+        return f"Flatten({self._child_._name_})"
+
+
+@dataclass(eq=False)
+class Merge(CanBehaveLikeAVariable[T]):
+    _child_: CanBehaveLikeAVariable[T]
+    _invert_: bool = field(init=False, default=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._var_ = self
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        if self._id_ in sources:
+            yield sources
+            return
+        all_values = []
+        child_val = self._child_._evaluate__(sources)
+        for child_v in child_val:
+            child_v_unwrapped = child_v[self._child_._id_].value
+            if not is_iterable(child_v_unwrapped):
+                child_v_unwrapped = [child_v_unwrapped]
+            all_values.extend(child_v_unwrapped)
+        yield {self._id_: HashedValue(all_values), **sources}
+
+    @property
+    def _name_(self):
+        return f"Merge({self._child_._name_})"
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return self._child_._all_variable_instances_
+
 
 
 @dataclass(eq=False)

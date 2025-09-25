@@ -66,6 +66,8 @@ object instance and use them as part of the query conditions.
 - [Example with Predicate Style Query/Rule](example_with_predicate_style_query.md): This shows queries and rules written in predicate (functional) style.
 - [Example with Cached Symbols](example_with_cached_symbols.md): This shows using cached @symbol instances without providing a domain.
 - [Example with Indexing](example_with_indexing.md): This shows capturing __getitem__ (indexing) in symbolic expressions.
+- [Example with Flatten](example_with_flatten.md): This shows the usage of the flatten() operation on nested variables.
+- [Example with Merge](example_with_merge.md): This shows the merge operation that combines inner iterables into one.
 
 ## To Cite:
 
@@ -74,6 +76,6 @@ object instance and use them as part of the query conditions.
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {2.0.0},
+version = {2.1.0},
 }
 ```

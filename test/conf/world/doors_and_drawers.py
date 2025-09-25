@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 from typing_extensions import List, Callable
 
-from .base_config import WorldConf, BodyConf, Connection, FixedConnectionConf, PrismaticConnectionConf, \
+from .base_config import WorldConf, BodyConf, ConnectionConf, FixedConnectionConf, PrismaticConnectionConf, \
     ContainerConf, RevoluteConnectionConf, HandleConf
 
 from ...factories.world import create_world
@@ -55,7 +55,7 @@ def bodies():
 @dataclass
 class World(WorldConf):
     bodies: List[BodyConf] = field(default_factory=bodies, init=False)
-    connections: List[Connection] = field(default_factory=lambda: [
+    connections: List[ConnectionConf] = field(default_factory=lambda: [
         FixedConnectionConf(parent=Container1(), child=Handle1()),
         FixedConnectionConf(parent=Body2(), child=Handle2()),
         FixedConnectionConf(parent=Body4(), child=Handle4()),
