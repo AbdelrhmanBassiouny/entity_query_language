@@ -47,10 +47,5 @@ def test_render_rx_graph_as_igraph_complex(doors_and_drawers_world):
     results = list(rule.evaluate())
 
     # rule._render_tree_()
-    rule._node_.visualize((80, 80), node_size=7000, font_size=25, label_max_chars_per_line=13,
-                          edge_style="orthogonal")
-    filename = "pdf_graph.pdf"
-    dpi = 300
-    plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight')
-    print(f"Saved as {filename} - can be zoomed infinitely!")
+    rule._node_.visualize()
 
