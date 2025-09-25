@@ -526,11 +526,6 @@ class An(ResultQuantifier[T]):
                     if self._var_:
                         value.update({self._id_: value[self._var_._id_]})
                     yield value
-            if not any_yielded:
-                self._is_false_ = True
-                if self._yield_when_false_:
-                    # Emit the current sources to allow parent OR/ElseIf to evaluate the other branch
-                    yield copy(sources)
 
 
 @dataclass(eq=False)
@@ -549,7 +544,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         if in_symbolic_mode(EQLMode.Rule):
             self.rule_mode = True
         for variable in self.selected_variables:
-            variable._plot_color_ = ColorLegend("SelectedVariable", self._plot_color_.color)
+            variable._var_._plot_color_ = ColorLegend("SelectedVariable", self._plot_color_.color)
 
     @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
@@ -588,7 +583,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
                     v = conclusion._evaluate__(v)
             self._warn_on_unbound_variables_(v, selected_vars)
             if selected_vars:
-                var_val_gen = {var: var._evaluate__(v)
+                var_val_gen = {var: var._evaluate__(copy(v))
                                for var in selected_vars}
                 original_v = v
                 for sol in generate_combinations(var_val_gen):
@@ -1080,8 +1075,12 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) \
             -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
         self._yield_when_false_ = yield_when_false
         self._child_._eval_parent_ = self
+        if self._id_ in sources:
+            yield sources
+            return
         child_val = self._child_._evaluate__(sources, yield_when_false=self._yield_when_false_)
         for child_v in child_val:
             v = self._apply_mapping_(child_v[self._child_._id_])
@@ -1106,6 +1105,11 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
             return self._plot_color__
         else:
             return ColorLegend("DomainMapping (Attribute, Callable, Indexing)", "#8FC7B8")
+
+    @_plot_color_.setter
+    def _plot_color_(self, value: ColorLegend):
+        self._plot_color__ = value
+        self._node_.color = value
 
 
 @dataclass(eq=False)
