@@ -1291,33 +1291,48 @@ class ForAll(BinaryOperator):
     @property
     @lru_cache(maxsize=None)
     def condition_unique_variable_ids(self) -> List[int]:
-        return [v.id_ for v in self.condition._unique_variables_]
+        return [v.id_ for v in self.condition._unique_variables_.difference(self.left._unique_variables_)]
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         sources = sources or {}
+
+        # Always reset per evaluation
+        self.solution_set = []
+
         var_val_index = 0
 
         for var_val in self.variable._evaluate__(sources):
             ctx = {**sources, **var_val}
             current = []
+
+            # Evaluate the condition under this particular universal value
             for condition_val in self.condition._evaluate__(ctx):
                 if self.condition._is_false_:
                     continue
+                # Keep only the non-universal variables from the condition bindings
                 filtered = {k: v for k, v in condition_val.items() if k in self.condition_unique_variable_ids}
                 current.append(filtered)
 
-            if var_val_index == 0:  # means the solution set has not been initialized yet
-                # seed with all bindings satisfying the condition for the first var value
+            # If the condition yields no satisfying bindings for this universal value, the universal fails
+            if not current:
+                self.solution_set = []
+                break
+
+            if var_val_index == 0:
+                # seed with all satisfying non-universal bindings
                 self.solution_set = current
             else:
-                var_val_index += 1
-                # keep only bindings that continue to satisfy the condition
+                # Intersect with previously accumulated satisfying bindings
                 current_set = {tuple(sorted(d.items())) for d in current}
                 self.solution_set = [d for d in self.solution_set if tuple(sorted(d.items())) in current_set]
 
+            var_val_index += 1
+
+            # Early exit if the intersection is empty
             if not self.solution_set:
                 break
 
+        # Yield the remaining bindings (non-universal) merged with the incoming sources
         for sol in self.solution_set or []:
             out = copy(sol)
             out.update(sources)
