@@ -1319,8 +1319,6 @@ class ForAll(BinaryOperator):
                 self.solution_set.append(condition_val_filtered)
 
 
-
-
 @dataclass(eq=False)
 class Comparator(BinaryOperator):
     """
