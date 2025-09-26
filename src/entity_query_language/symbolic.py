@@ -22,13 +22,13 @@ from functools import lru_cache
 
 from anytree import Node
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
-                               Generic, TypeVar, TYPE_CHECKING)
+                               Generic, TypeVar, TYPE_CHECKING, Set)
 from typing_extensions import List, Tuple, Callable
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache, get_cache_keys_for_class_, yield_class_values_from_cache
 from .failures import MultipleSolutionFound, NoSolutionFound
-from .utils import IDGenerator, is_iterable, render_tree, generate_combinations
+from .utils import IDGenerator, is_iterable, render_tree, generate_combinations, lazy_iterate_dicts
 from .hashed_data import HashedValue, HashedIterable, T
 
 if TYPE_CHECKING:
@@ -1253,6 +1253,72 @@ class BinaryOperator(SymbolicExpression, ABC):
         cp.left = [c for c in cp._children_ if c._id_ == self.left._id_][0]
         cp.right = [c for c in cp._children_ if c._id_ == self.right._id_][0]
         return cp
+
+
+@dataclass(eq=False)
+class ForAll(BinaryOperator):
+
+    solution_set: List[Dict[int, HashedValue]] = field(init=False, default_factory=list)
+
+    @property
+    def _name_(self) -> str:
+        return self.__class__.__name__
+
+    @property
+    def variable(self):
+        return self.left
+
+    @variable.setter
+    def variable(self, value):
+        self.left = value
+
+    @property
+    def condition(self):
+        return self.right
+
+    @condition.setter
+    def condition(self, value):
+        self.right = value
+
+    @property
+    @lru_cache(maxsize=None)
+    def condition_unique_variable_ids(self) -> List[int]:
+        return [v.id_ for v in self.condition._unique_variables_]
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
+        for var_val in self.variable._evaluate__(sources):
+            if self.solution_set:
+                for solution in self.solution_set:
+                    self.evaluate_condition_and_update_satisfied_bindings(sources, var_val, solution)
+            else:
+                self.evaluate_condition_and_update_satisfied_bindings(sources, var_val)
+            if not self.solution_set:
+                break
+        for sol in self.solution_set:
+            sol = copy(sol)
+            sol.update(sources)
+            yield sol
+
+    def evaluate_condition_and_update_satisfied_bindings(self,
+                                                         sources: Dict[int, HashedValue],
+                                                         var_val: Dict[int, HashedValue],
+                                                         current_satisfied_bindings: Optional[Dict[int, HashedValue]] = None) -> None:
+        sources = copy(sources)
+        sources.update(var_val)
+        if current_satisfied_bindings:
+            sources.update(current_satisfied_bindings)
+        for condition_val in self.condition._evaluate__(sources):
+            condition_val_filtered = {k: v for k, v in condition_val.items() if k in self.condition_unique_variable_ids}
+            if self.condition._is_false_:
+                try:
+                    self.solution_set.remove(condition_val_filtered)
+                except ValueError:
+                    continue
+            else:
+                self.solution_set.append(condition_val_filtered)
+
+
 
 
 @dataclass(eq=False)
