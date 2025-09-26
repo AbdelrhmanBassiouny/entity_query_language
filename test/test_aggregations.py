@@ -1,5 +1,5 @@
 from entity_query_language import a, set_of, symbolic_mode, let, From
-from entity_query_language.entity import flatten, entity, an, not_, in_, concatenate
+from entity_query_language.entity import flatten, entity, an, not_, in_, concatenate, the, for_all
 from .datasets import View, Drawer, Container, Handle, Cabinet
 
 
@@ -41,7 +41,7 @@ def test_flatten_iterable_attribute_and_use_not_equal(handles_and_containers_wor
     assert {row.handle.name for row in results} == {"Handle2", "Handle3"}
 
 
-def test_merge(handles_and_containers_world):
+def test_concatenate(handles_and_containers_world):
     world = handles_and_containers_world
 
     with symbolic_mode():
@@ -66,3 +66,30 @@ def test_merge(handles_and_containers_world):
     # We should get one row for each drawer and the parent view preserved
     assert len(results) == 1
     assert results[0].handle.name == "Handle1"
+
+
+def test_for_all(handles_and_containers_world):
+    world = handles_and_containers_world
+
+    with symbolic_mode():
+        cabinets = Cabinet(From(world.views))
+        the_cabinet_container = the(entity(c := Container(From(world.bodies)), c.name == "Container2"))
+        query = an(entity(the_cabinet_container, for_all(cabinets.container,
+                                                         the_cabinet_container == cabinets.container)))
+
+    results = list(query.evaluate())
+
+    # We should get one row for each drawer and the parent view preserved
+    assert len(results) == 1
+    assert results[0].name == "Container2"
+
+    with symbolic_mode():
+        cabinets = Cabinet(From(world.views))
+        the_cabinet_container = the(entity(c := Container(From(world.bodies)), c.name == "Container2"))
+        query = an(entity(the_cabinet_container, for_all(cabinets.container,
+                                                         the_cabinet_container != cabinets.container)))
+
+    results = list(query.evaluate())
+
+    # We should get one row for each drawer and the parent view preserved
+    assert len(results) == 0

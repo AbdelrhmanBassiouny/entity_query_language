@@ -9,7 +9,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tup
 
 from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
                        chained_logic, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode,
-                       Variable, Infer, _optimize_or, Flatten, Concatenate)
+                       Variable, Infer, _optimize_or, Flatten, Concatenate, ForAll)
 from .predicate import Predicate, symbols_registry
 
 T = TypeVar('T')  # Define type variable "T"
@@ -238,7 +238,20 @@ def flatten(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBeha
 
 def concatenate(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBehaveLikeAVariable[T], Iterable[T]]:
     """
-    Concatenate a nested iterable domain into a one element domain that is still a nested iterable that contains all
+    Concatenate a nested iterable domain into a one-element domain that is still a nested iterable that contains all
     the values of the sub iterables.
     """
     return Concatenate(var)
+
+
+def for_all(universal_variable: Union[CanBehaveLikeAVariable[T], T],
+            condition: Union[SymbolicExpression, bool, Predicate]):
+    """
+    A universal on variable that finds all sets of variable bindings (values) that satisfy the condition for every
+     value of the universal_variable.
+
+    :param universal_variable: The universal on variable that the condition must satisfy for all its values.
+    :condition: A SymbolicExpression or bool representing a condition that must be satisfied.
+    :return: A SymbolicExpression that can be evaluated producing every set that satisfies the condition.
+    """
+    return ForAll(universal_variable, condition)

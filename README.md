@@ -63,6 +63,6 @@ equal to "Body1".
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {2.1.2}
+version = {2.2.0}
 }
 ```

@@ -467,13 +467,20 @@ class The(ResultQuantifier[T]):
         self._yield_when_false__ = value
 
     def evaluate(self) -> TypingUnion[Iterable[T], T, UnificationDict]:
-        result = self._evaluate__()
+        result = self._evaluate_()
         result = self._process_result_(result)
         self._reset_cache_()
         return result
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        v = self._evaluate_(sources)
+        yield v
+        return
+
+    def _evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None) -> Dict[int, HashedValue]:
         sources = sources or {}
+        if self._id_ in sources:
+            return sources
         sol_gen = self._child_._evaluate__(sources)
         result = None
         for sol in sol_gen:
@@ -486,11 +493,12 @@ class The(ResultQuantifier[T]):
             self._is_false_ = True
         if self._is_false_:
             if self._yield_when_false_:
-                return sources
+                result = sources
             else:
                 raise NoSolutionFound(self._child_)
         else:
-            return result
+            result[self._id_] = result[self._var_._id_]
+        return result
 
 
 @dataclass(eq=False)
@@ -1287,36 +1295,33 @@ class ForAll(BinaryOperator):
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
         sources = sources or {}
+        var_val_index = 0
+
         for var_val in self.variable._evaluate__(sources):
-            if self.solution_set:
-                for solution in self.solution_set:
-                    self.evaluate_condition_and_update_satisfied_bindings(sources, var_val, solution)
+            ctx = {**sources, **var_val}
+            current = []
+            for condition_val in self.condition._evaluate__(ctx):
+                if self.condition._is_false_:
+                    continue
+                filtered = {k: v for k, v in condition_val.items() if k in self.condition_unique_variable_ids}
+                current.append(filtered)
+
+            if var_val_index == 0:  # means the solution set has not been initialized yet
+                # seed with all bindings satisfying the condition for the first var value
+                self.solution_set = current
             else:
-                self.evaluate_condition_and_update_satisfied_bindings(sources, var_val)
+                var_val_index += 1
+                # keep only bindings that continue to satisfy the condition
+                current_set = {tuple(sorted(d.items())) for d in current}
+                self.solution_set = [d for d in self.solution_set if tuple(sorted(d.items())) in current_set]
+
             if not self.solution_set:
                 break
-        for sol in self.solution_set:
-            sol = copy(sol)
-            sol.update(sources)
-            yield sol
 
-    def evaluate_condition_and_update_satisfied_bindings(self,
-                                                         sources: Dict[int, HashedValue],
-                                                         var_val: Dict[int, HashedValue],
-                                                         current_satisfied_bindings: Optional[Dict[int, HashedValue]] = None) -> None:
-        sources = copy(sources)
-        sources.update(var_val)
-        if current_satisfied_bindings:
-            sources.update(current_satisfied_bindings)
-        for condition_val in self.condition._evaluate__(sources):
-            condition_val_filtered = {k: v for k, v in condition_val.items() if k in self.condition_unique_variable_ids}
-            if self.condition._is_false_:
-                try:
-                    self.solution_set.remove(condition_val_filtered)
-                except ValueError:
-                    continue
-            else:
-                self.solution_set.append(condition_val_filtered)
+        for sol in self.solution_set or []:
+            out = copy(sol)
+            out.update(sources)
+            yield out
 
 
 @dataclass(eq=False)
@@ -1392,6 +1397,10 @@ class Comparator(BinaryOperator):
         """
         sources = sources or {}
 
+        if self._id_ in sources:
+            yield sources
+            return
+
         if is_caching_enabled():
             if self._cache_.check(sources):
                 yield from self.yield_final_output_from_cache(sources)
@@ -1411,6 +1420,7 @@ class Comparator(BinaryOperator):
                     values = copy(first_value)
                     values.update(second_value)
                     values.update(operand_value_map)
+                    values[self._id_] = HashedValue(res)
                     self.update_cache(values)
                     yield values
 

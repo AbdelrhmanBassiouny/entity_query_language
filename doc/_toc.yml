@@ -17,6 +17,7 @@ chapters:
 - file: example_with_indexing
 - file: example_with_flatten
 - file: example_with_concatenate
+- file: example_with_for_all
 - file: eql_for_sql_experts
 - file: bibliography
 - file: autoapi/index
