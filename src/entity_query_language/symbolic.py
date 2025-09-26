@@ -1139,7 +1139,7 @@ class Flatten(DomainMapping):
 
 
 @dataclass(eq=False)
-class Merge(CanBehaveLikeAVariable[T]):
+class Concatenate(CanBehaveLikeAVariable[T]):
     _child_: CanBehaveLikeAVariable[T]
     _invert_: bool = field(init=False, default=False)
 
@@ -1168,13 +1168,12 @@ class Merge(CanBehaveLikeAVariable[T]):
 
     @property
     def _name_(self):
-        return f"Merge({self._child_._name_})"
+        return f"{self.__class__.__name__}({self._child_._name_})"
 
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
         return self._child_._all_variable_instances_
-
 
 
 @dataclass(eq=False)

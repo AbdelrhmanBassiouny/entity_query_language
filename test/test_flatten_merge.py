@@ -1,5 +1,5 @@
 from entity_query_language import a, set_of, symbolic_mode, let, From
-from entity_query_language.entity import flatten, entity, an, not_, in_, merge
+from entity_query_language.entity import flatten, entity, an, not_, in_, concatenate
 from .datasets import View, Drawer, Container, Handle, Cabinet
 
 
@@ -47,7 +47,7 @@ def test_merge(handles_and_containers_world):
     with symbolic_mode():
         cabinets = Cabinet(From(world.views))
         my_drawers = an(entity(d := Drawer(From(world.views)), d.handle.name == "Handle1"))
-        drawers = merge(cabinets.drawers)
+        drawers = concatenate(cabinets.drawers)
         query = an(entity(my_drawers, not_(in_(my_drawers, drawers))))
 
     results = list(query.evaluate())
@@ -58,7 +58,7 @@ def test_merge(handles_and_containers_world):
     with symbolic_mode():
         cabinets = Cabinet(From(world.views))
         my_drawers = an(entity(d := Drawer(From(world.views)), d.handle.name == "Handle1"))
-        drawers = merge(cabinets.drawers)
+        drawers = concatenate(cabinets.drawers)
         query = an(entity(my_drawers, in_(my_drawers, drawers)))
 
     results = list(query.evaluate())

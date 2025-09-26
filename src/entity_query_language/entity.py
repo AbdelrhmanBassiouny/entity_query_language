@@ -9,7 +9,7 @@ from typing_extensions import Any, Optional, Union, Iterable, TypeVar, Type, Tup
 
 from .symbolic import (SymbolicExpression, Entity, SetOf, The, An, AND, Comparator, \
                        chained_logic, Not, CanBehaveLikeAVariable, ResultQuantifier, From, symbolic_mode,
-                       Variable, Infer, _optimize_or, Flatten, Merge)
+                       Variable, Infer, _optimize_or, Flatten, Concatenate)
 from .predicate import Predicate, symbols_registry
 
 T = TypeVar('T')  # Define type variable "T"
@@ -236,9 +236,9 @@ def flatten(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBeha
     return Flatten(var)
 
 
-def merge(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBehaveLikeAVariable[T], Iterable[T]]:
+def concatenate(var: Union[CanBehaveLikeAVariable[T], Iterable[T]]) -> Union[CanBehaveLikeAVariable[T], Iterable[T]]:
     """
-    Merge a nested iterable domain into a one element domain that is still a nested iterable that contains all
+    Concatenate a nested iterable domain into a one element domain that is still a nested iterable that contains all
     the values of the sub iterables.
     """
-    return Merge(var)
+    return Concatenate(var)

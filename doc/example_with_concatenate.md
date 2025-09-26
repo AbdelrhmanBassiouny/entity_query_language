@@ -1,7 +1,17 @@
+# Example with `concatenate`
+
+`concatenate` is used to combine nested iterables found in a variable's domain into a single iterable value while preserving any outer bindings. Conceptually, if you have a variable bound to a collection of collections (e.g., a view with a list of drawers), `concatenate` produces one value that is the concatenation of all those inner collections. This is useful for:
+
+- Performing membership checks (in_/not_) against a single concatenated iterable.
+- Passing a single, aggregated collection downstream in your query.
+
+Below is a minimal, self-contained example that mirrors the behavior tested in the suite (similar to `test_merge`).
+
+```python
 from dataclasses import dataclass, field
 from typing import List
 
-from entity_query_language import symbolic_mode, let, merge, not_, in_, entity, an, From
+from entity_query_language import symbolic_mode, let, concatenate, not_, in_, entity, an, From
 from entity_query_language.predicate import symbol
 
 
@@ -67,25 +77,25 @@ class CabinetLike(View):
 cabinet = CabinetLike([drawer1, drawer2])
 world.views = [cabinet]
 
-# Example 1: Use merge to collect all drawers into a single iterable domain
+# Example 1: Use concatenate to collect all drawers into a single iterable domain
 with symbolic_mode():
     views = let(type_=View, domain=world.views)
-    all_drawers = merge(views.drawers)  # <-- merge nested iterables into one iterable domain
-    # Select the merged iterable only (single row expected)
+    all_drawers = concatenate(views.drawers)  # <-- concatenate nested iterables into one iterable domain
+    # Select the concatenated iterable only (single row expected)
     query1 = an(entity(all_drawers))
 
 rows1 = list(query1.evaluate())
-# rows1 is a list with a single UnificationDict; `all_drawers` maps to the merged list of drawers
+# rows1 is a list with a single UnificationDict; `all_drawers` maps to the concatenated list of drawers
 assert len(rows1) == 1
 assert {d.handle.name for d in rows1[0]} == {"Handle1", "Handle3"}
 
-# Example 2: Test membership using in_/not_ with the merged iterable
+# Example 2: Test membership using in_/not_ with the concatenated iterable
 with symbolic_mode():
     # A variable ranging over drawers in the world (simulate another source of drawers)
     d = Drawer(From([drawer1, drawer2]))
     views = CabinetLike(From(world.views))
-    all_drawers = merge(views.drawers)
-    # Find drawers that are NOT in the merged list (expect none in this tiny world)
+    all_drawers = concatenate(views.drawers)
+    # Find drawers that are NOT in the concatenated list (expect none in this tiny world)
     query2 = an(entity(d, not_(in_(d, all_drawers))))
 
 rows2 = list(query2.evaluate())
@@ -94,9 +104,17 @@ assert len(rows2) == 0
 with symbolic_mode():
     d = let(type_=Drawer, domain=[drawer1, drawer2])
     views = let(type_=View, domain=world.views)
-    all_drawers = merge(views.drawers)
-    # Find drawers that ARE in the merged list (expect both)
+    all_drawers = concatenate(views.drawers)
+    # Find drawers that ARE in the concatenated list (expect both)
     query3 = an(entity(d, in_(d, all_drawers)))
 
 rows3 = list(query3.evaluate())
 assert {r.handle.name for r in rows3} == {"Handle1", "Handle3"}
+```
+
+Notes:
+- `concatenate` merges inner iterables into a single iterable from the bound variable's domain while keeping outer iterable, 
+ this is equivalent to creating a new variable with the concatenated domain, because this loses the binding to the original
+ variable elements.
+- Use `in_(x, concatenated)` and `not_(in_(x, concatenated))` to test membership against the concatenated collection.
+- If you need one result per inner element while keeping parent bindings, use `flatten` instead.
