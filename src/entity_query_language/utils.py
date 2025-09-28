@@ -51,6 +51,12 @@ class IDGenerator:
         return self._counter
 
 
+def lazy_iterate_dicts(dict_of_iterables):
+    """Generator that yields dicts with one value from each iterable"""
+    for values in zip(*dict_of_iterables.values()):
+        yield dict(zip(dict_of_iterables.keys(), values))
+
+
 def generate_combinations(generators_dict):
     """Yield all combinations of generator values as keyword arguments"""
     for combination in itertools.product(*generators_dict.values()):

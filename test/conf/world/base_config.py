@@ -23,24 +23,41 @@ class ContainerConf(BodyConf):
 
 
 @dataclass
-class Connection:
+class ConnectionConf:
     parent: BodyConf = MISSING
     child: BodyConf = MISSING
 
 
 @dataclass
-class FixedConnectionConf(Connection):
+class FixedConnectionConf(ConnectionConf):
     pass
 
 
 @dataclass
-class PrismaticConnectionConf(Connection):
+class PrismaticConnectionConf(ConnectionConf):
     pass
 
 
 @dataclass
-class RevoluteConnectionConf(Connection):
+class RevoluteConnectionConf(ConnectionConf):
     pass
+
+
+@dataclass
+class ViewConf:
+    ...
+
+
+@dataclass
+class DrawerConf(ViewConf):
+    container: BodyConf = MISSING
+    handle: HandleConf = MISSING
+
+
+@dataclass
+class CabinetConf(ViewConf):
+    container: ContainerConf = MISSING
+    drawers: List[DrawerConf] = field(default_factory=list)
 
 
 @dataclass
@@ -54,4 +71,5 @@ class CaseConf:
 @dataclass
 class WorldConf(CaseConf):
     bodies: List[BodyConf] = field(default_factory=list)
-    connections: List[Connection] = field(default_factory=list)
+    connections: List[ConnectionConf] = field(default_factory=list)
+    views: List[ViewConf] = field(default_factory=list)

@@ -23,14 +23,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from typing_extensions import (Iterable, Any, Optional, Type, Dict, ClassVar, Union as TypingUnion,
-                               Generic, TypeVar, TYPE_CHECKING)
+                               Generic, TypeVar, TYPE_CHECKING, Set)
 from typing_extensions import List, Tuple, Callable
 
 
 from .cache_data import cache_enter_count, cache_search_count, cache_match_count, is_caching_enabled, SeenSet, \
     IndexedCache, get_cache_keys_for_class_, yield_class_values_from_cache
 from .failures import MultipleSolutionFound, NoSolutionFound
-from .utils import IDGenerator, is_iterable, render_tree, generate_combinations
+from .utils import IDGenerator, is_iterable, render_tree, generate_combinations, lazy_iterate_dicts
 from .hashed_data import HashedValue, HashedIterable, T
 
 if TYPE_CHECKING:
@@ -461,15 +461,22 @@ class The(ResultQuantifier[T]):
     """
 
     def evaluate(self) -> TypingUnion[Iterable[T], T, UnificationDict]:
-        result = self._evaluate__()
+        result = self._evaluate_()
         result = self._process_result_(result)
         self._reset_cache_()
         return result
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Dict[int, HashedValue]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
+        v = self._evaluate_(sources, yield_when_false=yield_when_false)
+        yield v
+        return
+
+    def _evaluate_(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) -> Dict[int, HashedValue]:
         sources = sources or {}
         self._yield_when_false_ = yield_when_false
         self._child_._eval_parent_ = self
+        if self._id_ in sources:
+            return sources
         sol_gen = self._child_._evaluate__(sources)
         result = None
         for sol in sol_gen:
@@ -482,11 +489,12 @@ class The(ResultQuantifier[T]):
             self._is_false_ = True
         if self._is_false_:
             if self._yield_when_false_:
-                return sources
+                result = sources
             else:
                 raise NoSolutionFound(self._child_)
         else:
-            return result
+            result[self._id_] = result[self._var_._id_]
+        return result
 
 
 @dataclass(eq=False)
@@ -1071,8 +1079,7 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
     @property
     @lru_cache(maxsize=None)
     def _all_variable_instances_(self) -> List[Variable]:
-        return self._child_._all_variable_instances_ if not isinstance(self._child_, Variable) \
-            else [self._child_]
+        return self._child_._all_variable_instances_
 
     def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None, yield_when_false: bool = False) \
             -> Iterable[Dict[int, HashedValue]]:
@@ -1084,17 +1091,18 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
             return
         child_val = self._child_._evaluate__(sources, yield_when_false=self._yield_when_false_)
         for child_v in child_val:
-            v = self._apply_mapping_(child_v[self._child_._id_])
-            if (not self._invert_ and v.value) or (self._invert_ and not v.value):
-                self._is_false_ = False
-            else:
-                self._is_false_ = True
-            if self._yield_when_false_ or not self._is_false_:
-                child_v[self._id_] = v
-                yield child_v
+            for v in self._apply_mapping_(child_v[self._child_._id_]):
+                values = copy(child_v)
+                if (not self._invert_ and v.value) or (self._invert_ and not v.value):
+                    self._is_false_ = False
+                else:
+                    self._is_false_ = True
+                if self._yield_when_false_ or not self._is_false_:
+                    values[self._id_] = v
+                    yield values
 
     @abstractmethod
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
         """
         Apply the domain mapping to a symbolic value.
         """
@@ -1120,8 +1128,8 @@ class Attribute(DomainMapping):
     """
     _attr_name_: str
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
-        return HashedValue(id_=value.id_, value=getattr(value.value, self._attr_name_))
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        yield HashedValue(id_=value.id_, value=getattr(value.value, self._attr_name_))
 
     @property
     def _name_(self):
@@ -1135,8 +1143,8 @@ class Index(DomainMapping):
     """
     _key_: Any
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
-        return HashedValue(id_=value.id_, value=value.value[self._key_])
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        yield HashedValue(id_=value.id_, value=value.value[self._key_])
 
     @property
     def _name_(self):
@@ -1151,15 +1159,78 @@ class Call(DomainMapping):
     _args_: Tuple[Any, ...] = field(default_factory=tuple)
     _kwargs_: Dict[str, Any] = field(default_factory=dict)
 
-    def _apply_mapping_(self, value: HashedValue) -> HashedValue:
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
         if len(self._args_) > 0 or len(self._kwargs_) > 0:
-            return HashedValue(id_=value.id_, value=value.value(*self._args_, **self._kwargs_))
+            yield HashedValue(id_=value.id_, value=value.value(*self._args_, **self._kwargs_))
         else:
-            return HashedValue(id_=value.id_, value=value.value())
+            yield HashedValue(id_=value.id_, value=value.value())
 
     @property
     def _name_(self):
         return f"{self._child_._var_._name_}()"
+
+
+@dataclass(eq=False)
+class Flatten(DomainMapping):
+    """
+    Domain mapping that flattens an iterable-of-iterables into a single iterable of items.
+
+    Given a child expression that evaluates to an iterable (e.g., Views.bodies), this mapping yields
+    one solution per inner element while preserving the original bindings (e.g., the View instance),
+    similar to UNNEST in SQL.
+    """
+
+    def _apply_mapping_(self, value: HashedValue) -> Iterable[HashedValue]:
+        inner = value.value
+        # Treat non-iterables as singletons
+        if not is_iterable(inner):
+            inner_iter = [inner]
+        else:
+            inner_iter = inner
+        for inner_v in inner_iter:
+            yield HashedValue(inner_v)
+
+    @property
+    def _name_(self):
+        return f"Flatten({self._child_._name_})"
+
+
+@dataclass(eq=False)
+class Concatenate(CanBehaveLikeAVariable[T]):
+    _child_: CanBehaveLikeAVariable[T]
+    _invert_: bool = field(init=False, default=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._var_ = self
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
+        if self._id_ in sources:
+            yield sources
+            return
+        all_values = defaultdict(list)
+        for child_v in self._child_._evaluate__(sources):
+            child_v = copy(child_v)
+            for id_, val in child_v.items():
+                if id_ == self._child_._id_:
+                    child_v_unwrapped = val.value
+                    if not is_iterable(child_v_unwrapped):
+                        child_v_unwrapped = [child_v_unwrapped]
+                    all_values[self._id_].extend(child_v_unwrapped)
+                all_values[id_].append(val)
+            for s_id, s_val in sources.items():
+                all_values[s_id].append(s_val)
+        yield {k: HashedValue(v) for k, v in all_values.items()}
+
+    @property
+    def _name_(self):
+        return f"{self.__class__.__name__}({self._child_._name_})"
+
+    @property
+    @lru_cache(maxsize=None)
+    def _all_variable_instances_(self) -> List[Variable]:
+        return self._child_._all_variable_instances_
 
 
 @dataclass(eq=False)
@@ -1236,6 +1307,82 @@ class BinaryOperator(SymbolicExpression, ABC):
 
 
 @dataclass(eq=False)
+class ForAll(BinaryOperator):
+
+    solution_set: List[Dict[int, HashedValue]] = field(init=False, default_factory=list)
+
+    @property
+    def _name_(self) -> str:
+        return self.__class__.__name__
+
+    @property
+    def variable(self):
+        return self.left
+
+    @variable.setter
+    def variable(self, value):
+        self.left = value
+
+    @property
+    def condition(self):
+        return self.right
+
+    @condition.setter
+    def condition(self, value):
+        self.right = value
+
+    @property
+    @lru_cache(maxsize=None)
+    def condition_unique_variable_ids(self) -> List[int]:
+        return [v.id_ for v in self.condition._unique_variables_.difference(self.left._unique_variables_)]
+
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+        sources = sources or {}
+
+        # Always reset per evaluation
+        self.solution_set = []
+
+        var_val_index = 0
+
+        for var_val in self.variable._evaluate__(sources):
+            ctx = {**sources, **var_val}
+            current = []
+
+            # Evaluate the condition under this particular universal value
+            for condition_val in self.condition._evaluate__(ctx):
+                if self.condition._is_false_:
+                    continue
+                # Keep only the non-universal variables from the condition bindings
+                filtered = {k: v for k, v in condition_val.items() if k in self.condition_unique_variable_ids}
+                current.append(filtered)
+
+            # If the condition yields no satisfying bindings for this universal value, the universal fails
+            if not current:
+                self.solution_set = []
+                break
+
+            if var_val_index == 0:
+                # seed with all satisfying non-universal bindings
+                self.solution_set = current
+            else:
+                # Intersect with previously accumulated satisfying bindings
+                current_set = {tuple(sorted(d.items())) for d in current}
+                self.solution_set = [d for d in self.solution_set if tuple(sorted(d.items())) in current_set]
+
+            var_val_index += 1
+
+            # Early exit if the intersection is empty
+            if not self.solution_set:
+                break
+
+        # Yield the remaining bindings (non-universal) merged with the incoming sources
+        for sol in self.solution_set or []:
+            out = copy(sol)
+            out.update(sources)
+            yield out
+
+
+@dataclass(eq=False)
 class Comparator(BinaryOperator):
     """
     A symbolic equality check that can be used to compare symbolic variables.
@@ -1302,6 +1449,10 @@ class Comparator(BinaryOperator):
         sources = sources or {}
         self._yield_when_false_ = yield_when_false
 
+        if self._id_ in sources:
+            yield sources
+            return
+
         if is_caching_enabled():
             if self._cache_.check(sources):
                 yield from self.yield_final_output_from_cache(sources)
@@ -1323,6 +1474,7 @@ class Comparator(BinaryOperator):
                     values = copy(first_value)
                     values.update(second_value)
                     values.update(operand_value_map)
+                    values[self._id_] = HashedValue(res)
                     self.update_cache(values)
                     yield values
 
