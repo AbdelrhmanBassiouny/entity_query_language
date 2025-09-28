@@ -41,8 +41,11 @@ class RWXNode:
     wrap_facecolor: Optional[str] = field(default=None)
     wrap_edgecolor: Optional[str] = field(default=None)
     wrap_alpha: float = field(default=0.08)
+    # Visual emphasis options
+    enclosed: bool = field(default=False)
     id_: int = field(init=False)
     _graph: ClassVar[rx.PyDAG] = rx.PyDAG()
+    enclosed_name: ClassVar[str] = 'enclosed'
 
     def __post_init__(self):
         # store self as node data to keep a 1:1 mapping
@@ -188,6 +191,7 @@ class GraphVisualizer:
         fig, ax = self._setup_figure()
         self._wrap_labels_and_sizes()
         self._compute_pixel_and_obstacles(fig, ax)
+        self._adjust_limits_and_center(ax)
         self._draw_wrap_boxes(ax)
         self._draw_edges(ax)
         self._draw_nodes_and_labels(ax)
@@ -413,8 +417,10 @@ class GraphVisualizer:
     def _setup_figure(self):
         figsize = self.ctx.get('figsize', self.params['figsize'])
         fig, ax = plt.subplots(figsize=figsize)
-        ax.set_xlim(0.0, self.ctx['x_extent'])
-        ax.set_ylim(0.0, self.ctx['y_extent'])
+        xlim = self.ctx.get('xlim', (0.0, self.ctx['x_extent']))
+        ylim = self.ctx.get('ylim', (0.0, self.ctx['y_extent']))
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
         return fig, ax
 
     def _wrap_labels_and_sizes(self):
@@ -481,6 +487,58 @@ class GraphVisualizer:
             prev_ortho_segments=[],
             bump_registry=set(),
         ))
+
+    def _adjust_limits_and_center(self, ax):
+        # Compute padded content bounds from obstacles and center horizontally around the root when possible.
+        norm_pos = self.ctx['norm_pos']
+        obstacles_rects = self.ctx['obstacles_rects']
+        dx_per_px = self.ctx['dx_per_px']
+        dy_per_px = self.ctx['dy_per_px']
+        x_extent = self.ctx['x_extent']
+        y_extent = self.ctx['y_extent']
+        root = self.ctx['root']
+        id_map = self.ctx['id_map']
+        # Content bounds
+        xs_min = min(r[0] for r in obstacles_rects) if obstacles_rects else 0.0
+        xs_max = max(r[1] for r in obstacles_rects) if obstacles_rects else x_extent
+        ys_min = min(r[2] for r in obstacles_rects) if obstacles_rects else 0.0
+        ys_max = max(r[3] for r in obstacles_rects) if obstacles_rects else y_extent
+        # Padding in pixels converted to data units
+        pad_x = dx_per_px * 8.0
+        pad_y = dy_per_px * 8.0
+        # Horizontal centering around root if feasible
+        root_idx = id_map.get(root.id)
+        xs_min_pad = xs_min - pad_x
+        xs_max_pad = xs_max + pad_x
+        if root_idx is not None:
+            root_x = float(norm_pos[root_idx, 0])
+            # Choose symmetric window around root wide enough to include all content with padding
+            half_width = max(root_x - xs_min_pad, xs_max_pad - root_x, 0.05)
+            x_left = root_x - half_width
+            x_right = root_x + half_width
+            # If window exceeds extents, shift without shrinking
+            if x_left < 0.0:
+                shift = -x_left
+                x_left += shift
+                x_right += shift
+            if x_right > x_extent:
+                shift = x_right - x_extent
+                x_left -= shift
+                x_right -= shift
+            # If still outside due to too large content, clamp to full extent
+            if x_left < 0.0 or x_right > x_extent or (x_right - x_left) > x_extent:
+                x_left = 0.0
+                x_right = x_extent
+        else:
+            x_left = max(0.0, xs_min_pad)
+            x_right = min(x_extent, xs_max_pad)
+        y_bottom = max(0.0, ys_min - pad_y)
+        y_top = min(y_extent, ys_max + pad_y)
+        # Store and apply
+        self.ctx['xlim'] = (x_left, x_right)
+        self.ctx['ylim'] = (y_bottom, y_top)
+        ax.set_xlim(self.ctx['xlim'])
+        ax.set_ylim(self.ctx['ylim'])
 
     def _draw_wrap_boxes(self, ax):
         ordered_nodes = self.ctx['ordered_nodes']
@@ -934,10 +992,22 @@ class GraphVisualizer:
         wrapped_labels = self.ctx['wrapped_labels']
         font_size = self.params['font_size']
         colors = [n.color.color if n.color else ColorLegend().color for n in ordered_nodes]
+        # Base node markers
         ax.scatter(norm_pos[:, 0], norm_pos[:, 1],
                    s=size_per_node, c=colors,
                    edgecolors='black', linewidths=2.0,
                    alpha=0.95, zorder=2)
+        # Optional enclosing circles for emphasis
+        enclosed_mask = np.array([int(n.enclosed) for n in ordered_nodes], dtype=bool)
+        any_enclosed = bool(enclosed_mask.any())
+        if any_enclosed:
+            enc_pos = norm_pos[enclosed_mask]
+            enc_sizes = size_per_node[enclosed_mask] * 1.5
+            ax.scatter(enc_pos[:, 0], enc_pos[:, 1],
+                       s=enc_sizes,
+                       facecolors='none', edgecolors='black', linewidths=4.0,
+                       alpha=0.95, zorder=2.8)
+        # Labels
         for (x, y), text in zip(norm_pos, wrapped_labels):
             # Avoid obscuring empty-label nodes with a white bbox; skip bbox if label is empty/whitespace
             if text.strip() == "":
@@ -949,9 +1019,11 @@ class GraphVisualizer:
                     bbox=dict(boxstyle="round,pad=0.28", facecolor="white", alpha=0.85),
                     zorder=3)
         self.ctx['colors'] = colors
+        self.ctx['any_enclosed'] = any_enclosed
 
     def _draw_legend(self, fig, ax):
         from collections import OrderedDict
+        from matplotlib.lines import Line2D
         ordered_nodes = self.ctx['ordered_nodes']
         colors = self.ctx['colors']
         fam_to_color = OrderedDict()
@@ -965,8 +1037,13 @@ class GraphVisualizer:
         for lbl, col in fam_to_color.items():
             patch = mpl.patches.Patch(facecolor=col, edgecolor='black', label=lbl)
             handles.append(patch)
+        # Add enclosed marker legend if applicable
+        if self.ctx.get('any_enclosed', False):
+            enclosed_handle = Line2D([0], [0], marker='o', linestyle='None', label=RWXNode.enclosed_name,
+                                     markerfacecolor='none', markeredgecolor='black', markeredgewidth=2.5)
+            handles.append(enclosed_handle)
         fw, fh = fig.get_size_inches()
-        scale = 0.5 * (max(0.5, fw / 12.0) + max(0.5, fh / 9.0))
+        scale = 0.7 * (max(0.5, fw / 12.0) + max(0.5, fh / 9.0))
         legend_fs = float(np.clip(10.0 * scale, 8.0, 28.0))
         title_fs = float(np.clip(legend_fs * 1.1, 9.0, 32.0))
         ax.legend(handles=handles, title="Node types", loc='upper left', framealpha=0.9,
@@ -981,8 +1058,10 @@ class GraphVisualizer:
         # Keep title if desired
         ax.set_title("Directed Query Graph (Top to Bottom)", fontsize=14, pad=20)
         ax.set_aspect('auto', adjustable='box')
-        ax.set_xlim(0.0, self.ctx['x_extent'])
-        ax.set_ylim(0.0, self.ctx['y_extent'])
+        xlim = self.ctx.get('xlim', (0.0, self.ctx['x_extent']))
+        ylim = self.ctx.get('ylim', (0.0, self.ctx['y_extent']))
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
         # Remove tick marks and labels
         ax.set_xticks([])
         ax.set_yticks([])
