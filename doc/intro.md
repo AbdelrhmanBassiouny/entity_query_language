@@ -8,6 +8,16 @@ EQL is a relational query language that is pythonic, and intuitive.
 The interface side of EQL is inspired by [euROBIN](https://www.eurobin-project.eu/) entity query language white paper.
 
 
+## Installation
+
+```bash
+pip install entity_query_language
+```
+If you want to use the visualization feature, you will also need to install [rustworkx_utils](https://github.com/AbdelrhmanBassiouny/rustworkx_utils).
+```bash
+pip install rustworkx_utils
+```
+
 # Example Usage
 
 ## Basic Example
@@ -77,6 +87,6 @@ object instance and use them as part of the query conditions.
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {2.2.0},
+version = {3.0.0},
 }
 ```

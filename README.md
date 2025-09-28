@@ -7,8 +7,13 @@ The interface side of EQL is inspired by [euROBIN](https://www.eurobin-project.e
 ## Installation
 
 ```bash
-pip install entity_query_language
+pip install entity_query_languageS
 ```
+If you want to use the visualization feature, you will also need to install [rustworkx_utils](https://github.com/AbdelrhmanBassiouny/rustworkx_utils).
+```bash
+pip install rustworkx_utils
+```
+
 ## Documentation
 
 Read the documentation [here](https://abdelrhmanbassiouny.github.io/entity_query_language/).
@@ -63,6 +68,6 @@ equal to "Body1".
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {2.2.0}
+version = {3.0.0}
 }
 ```
