@@ -1104,7 +1104,7 @@ class DomainMapping(CanBehaveLikeAVariable[T], ABC):
         if self._plot_color__:
             return self._plot_color__
         else:
-            return ColorLegend("DomainMapping (Attribute, Callable, Indexing)", "#8FC7B8")
+            return ColorLegend("DomainMapping", "#8FC7B8")
 
     @_plot_color_.setter
     def _plot_color_(self, value: ColorLegend):

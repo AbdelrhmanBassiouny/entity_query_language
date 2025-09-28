@@ -73,6 +73,8 @@ def select_one_or_select_many_or_infer(quantifier: Union[Type[An], Type[The], Ty
         entity_ = has_type()
     if isinstance(entity_, (Entity, SetOf)):
         q = quantifier(entity_)
+    elif isinstance(entity_, ResultQuantifier) and not properties:
+        q = entity_
     elif isinstance(entity_, CanBehaveLikeAVariable):
         q = quantifier(entity(entity_, *properties))
     elif isinstance(entity_, (list, tuple)):
@@ -132,8 +134,9 @@ def _extract_variables_and_expression(selected_variables: Iterable[T], *properti
         if isinstance(var, ResultQuantifier):
             result_quantifier = var
             var = var._var_
-            if result_quantifier._child_._child_:
-                expression_list.append(result_quantifier._child_._child_)
+            expression_list.append(result_quantifier)
+            # if result_quantifier._child_._child_:
+            #     expression_list.append(result_quantifier._child_._child_)
             selected_variables[i] = var
     expression_list += final_expression_list
     expression = None

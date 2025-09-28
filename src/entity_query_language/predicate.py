@@ -74,7 +74,7 @@ def symbol(cls):
             # attributes given as keyword arguments.
             var, expression = extract_selected_variable_and_expression(symbolic_cls, domain, predicate_type,
                                                                        **kwargs)
-            return An(Entity(expression, [var]))
+            return An(Entity(expression, [var])) if expression else var
 
     def hybrid_new(symbolic_cls, *args, **kwargs):
         if in_symbolic_mode():
