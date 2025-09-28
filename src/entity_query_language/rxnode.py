@@ -122,7 +122,7 @@ class RWXNode:
     def __str__(self):
         return self.name
 
-    def visualize(self, figsize=(80, 80), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
+    def visualize(self, figsize=(35, 30), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
                   curve_scale: float = 0.5, layout: str = 'tidy', edge_style: str = 'orthogonal',
                   label_max_chars_per_line: Optional[int] = 13):
         """Render a rooted, top-to-bottom directed graph.
@@ -155,9 +155,9 @@ class GraphVisualizer:
                  spacing_x: float = 4, spacing_y: float = 4, curve_scale: float = 0.5,
                  layout: str = 'tidy', edge_style: str = 'orthogonal',
                  label_max_chars_per_line: Optional[int] = 13,
-                 orthogonal_spline_ratio_threshold: float = 2.2,
-                 orthogonal_crossings_threshold: int = 0,
-                 orthogonal_min_length_threshold: Optional[float] = 2):
+                 orthogonal_spline_ratio_threshold: float = 3,
+                 orthogonal_crossings_threshold: int = 4,
+                 orthogonal_min_length_threshold: Optional[float] = 4):
         self.node = node
         self.params = dict(
             figsize=figsize,
@@ -708,7 +708,7 @@ class GraphVisualizer:
                         return [p1, p2, p3]
                     return None
                 def try_vh():
-                    ym = y0
+                    ym = y1
                     p1 = (x0, y0)
                     p2 = (x0, ym)
                     p3 = (x1, ym)
@@ -813,6 +813,15 @@ class GraphVisualizer:
                 from matplotlib.path import Path as MPath
                 # Crop endpoints of the orthogonal path so it meets node borders
                 pts = list(best)
+                # Pre-cropping deduplication to ensure non-zero first/last segments
+                pre_pts: List[Tuple[float, float]] = []
+                for p in pts:
+                    if not pre_pts:
+                        pre_pts.append(p)
+                    else:
+                        if float(np.hypot(p[0] - pre_pts[-1][0], p[1] - pre_pts[-1][1])) > 1e-12:
+                            pre_pts.append(p)
+                pts = pre_pts if len(pre_pts) >= 2 else pts
                 clamp_frac = 0.8
                 eps = 1e-9
                 # First segment direction
@@ -964,15 +973,25 @@ class GraphVisualizer:
                   fontsize=legend_fs, title_fontsize=title_fs)
 
     def _style_and_save(self, fig, ax):
+        # White backgrounds
+        fig.patch.set_facecolor('white')
         ax.set_facecolor('white')
+        # Optional grid can remain subtle
         ax.grid(True, alpha=0.25)
+        # Keep title if desired
         ax.set_title("Directed Query Graph (Top to Bottom)", fontsize=14, pad=20)
         ax.set_aspect('auto', adjustable='box')
         ax.set_xlim(0.0, self.ctx['x_extent'])
         ax.set_ylim(0.0, self.ctx['y_extent'])
+        # Remove tick marks and labels
         ax.set_xticks([])
         ax.set_yticks([])
+        # Hide axis spines (borders) and frame
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_frame_on(False)
+        # Compact layout then save with a small white margin around content
         plt.tight_layout()
         filename = "pdf_graph.pdf"
         dpi = 300
-        plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight')
+        plt.savefig(filename, format='pdf', dpi=dpi, bbox_inches='tight', pad_inches=0.2, facecolor=fig.get_facecolor())
