@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from entity_query_language import symbol, a, predicate, the, entity, symbolic_mode, rule_mode, an
+from entity_query_language import symbol, a, predicate, the, entity, symbolic_mode, an
 
 
 class Color(Enum):
