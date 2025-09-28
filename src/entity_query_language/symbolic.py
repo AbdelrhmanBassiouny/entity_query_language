@@ -62,6 +62,7 @@ T = TypeVar("T")
 
 id_generator = IDGenerator()
 
+RWXNode.enclosed_name = "Selected Variable"
 
 @dataclass(eq=False)
 class SymbolicExpression(Generic[T], ABC):
@@ -544,7 +545,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
         if in_symbolic_mode(EQLMode.Rule):
             self.rule_mode = True
         for variable in self.selected_variables:
-            variable._var_._plot_color_ = ColorLegend("SelectedVariable", self._plot_color_.color)
+            variable._var_._node_.enclosed = True
 
     @lru_cache(maxsize=None)
     def _required_variables_from_child_(self, child: Optional[SymbolicExpression] = None, when_true: bool = True):
@@ -638,7 +639,7 @@ class QueryObjectDescriptor(CanBehaveLikeAVariable[T], ABC):
 
     @property
     def _plot_color_(self) -> ColorLegend:
-        return ColorLegend("QueryObjectDescriptor", '#d62728')
+        return ColorLegend("ObjectDescriptor", '#d62728')
 
     @property
     def _name_(self) -> str:
