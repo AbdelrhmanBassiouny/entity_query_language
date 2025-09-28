@@ -1,15 +1,15 @@
 import pytest
 
 try:
-    from matplotlib import pyplot as plt
+    from rustworkx_utils import GraphVisualizer
 except ImportError:
-    plt = None
+    GraphVisualizer = None
 
 from .datasets import Drawer, Handle, FixedConnection, Body, Container, PrismaticConnection, RevoluteConnection, View, \
     Door, Wardrobe
 from entity_query_language import entity, rule_mode, infer, HasType, symbolic_mode, Add, alternative
 
-@pytest.mark.skipif(plt is None, reason="requires matplotlib")
+@pytest.mark.skipif(GraphVisualizer is None, reason="requires rustworkx_utils")
 def test_render_rx_graph_as_igraph_simple(handles_and_containers_world):
     world = handles_and_containers_world
     with rule_mode():
@@ -20,10 +20,9 @@ def test_render_rx_graph_as_igraph_simple(handles_and_containers_world):
                                HasType(handle, Handle)))
     drawers = list(rule.evaluate())
     rule._node_.visualize()
-    # plt.show()
 
 
-@pytest.mark.skipif(plt is None, reason="requires matplotlib")
+@pytest.mark.skipif(GraphVisualizer is None, reason="requires rustworkx_utils")
 def test_render_rx_graph_as_igraph_complex(doors_and_drawers_world):
     world = doors_and_drawers_world
     with symbolic_mode():
@@ -45,7 +44,5 @@ def test_render_rx_graph_as_igraph_complex(doors_and_drawers_world):
                          revolute_connection.world == world):
             Add(views, Wardrobe(handle=handle, body=body, container=container, world=world))
     results = list(rule.evaluate())
-
-    # rule._render_tree_()
     rule._node_.visualize()
 

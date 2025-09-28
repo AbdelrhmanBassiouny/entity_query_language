@@ -1336,7 +1336,8 @@ class ForAll(BinaryOperator):
     def condition_unique_variable_ids(self) -> List[int]:
         return [v.id_ for v in self.condition._unique_variables_.difference(self.left._unique_variables_)]
 
-    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None) -> Iterable[Dict[int, HashedValue]]:
+    def _evaluate__(self, sources: Optional[Dict[int, HashedValue]] = None,
+                    yield_when_false: bool = False) -> Iterable[Dict[int, HashedValue]]:
         sources = sources or {}
 
         # Always reset per evaluation

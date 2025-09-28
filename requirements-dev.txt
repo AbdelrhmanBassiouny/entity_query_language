@@ -6,3 +6,4 @@ pydot
 pdbpp
 pytest
 omegaconf
+rustworkx_utils
