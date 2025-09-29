@@ -434,6 +434,16 @@ class ResultQuantifier(CanBehaveLikeAVariable[T], ABC):
         else:
             raise NotImplementedError(f"Unknown child type {type(self._child_)}")
 
+    def visualize(self, figsize=(35, 30), node_size=7000, font_size=25, spacing_x: float = 4, spacing_y: float = 4,
+                  layout: str = 'tidy', edge_style: str = 'orthogonal',
+                  label_max_chars_per_line: Optional[int] = 13):
+        """
+        Visualize the query graph, for arguments' documentation see `rustworkx_utils.RWXNode.visualize`.
+        """
+        self._node_.visualize(figsize=figsize, node_size=node_size, font_size=font_size, spacing_x=spacing_x,
+                              spacing_y=spacing_y, layout=layout, edge_style=edge_style,
+                              label_max_chars_per_line=label_max_chars_per_line)
+
     @property
     def _plot_color_(self) -> ColorLegend:
         return ColorLegend("ResultQuantifier", '#9467bd')
