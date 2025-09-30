@@ -295,10 +295,11 @@ class SymbolicExpression(Generic[T], ABC):
     def __invert__(self):
         return Not(self)
 
-    def __enter__(self):
+    def __enter__(self, in_rule_mode: bool = False):
         node = self
-        if (node is self._root_) or (node._parent_ is self._root_):
-            node = node._conditions_root_
+        if in_rule_mode or in_symbolic_mode(EQLMode.Rule):
+            if (node is self._root_) or (node._parent_ is self._root_):
+                node = node._conditions_root_
         SymbolicExpression._symbolic_expression_stack_.append(node)
         return self
 
@@ -1804,7 +1805,7 @@ def symbolic_mode(query: Optional[SymbolicExpression] = None, mode: EQLMode = EQ
     prev_mode = _symbolic_mode.get()
     try:
         if query is not None:
-            query.__enter__()
+            query.__enter__(in_rule_mode=True)
         _set_symbolic_mode(mode)
         yield SymbolicExpression._current_parent_()
     finally:

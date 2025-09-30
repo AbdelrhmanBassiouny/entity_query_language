@@ -729,3 +729,12 @@ def test_nested_query_with_multiple_sources(handles_and_containers_world):
     assert all(nested_res[k] == original_res[k]
                for nested_res, original_res in zip(original_query_results, nested_query_results)
                for k in drawer_components), "Should generate same results"
+
+
+def test_implicitly_bound_first_predicate_argument(handles_and_containers_world):
+    world = handles_and_containers_world
+    with symbolic_mode():
+        with a(Body(From(world.bodies))) as q:
+            HasType(Handle)
+    results = list(q.evaluate())
+    assert len(results) == 3, "Should generate 3 handles."

@@ -13,7 +13,8 @@ from typing_extensions import ClassVar
 from .cache_data import yield_class_values_from_cache, get_cache_keys_for_class_
 from .enums import PredicateType, EQLMode
 from .hashed_data import HashedValue
-from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, From, properties_to_expression_tree
+from .symbolic import T, SymbolicExpression, in_symbolic_mode, Variable, An, Entity, From, \
+    properties_to_expression_tree, ResultQuantifier, AND
 from .utils import is_iterable
 
 
@@ -60,14 +61,18 @@ def symbol(cls):
     symbols_registry.append(cls)
 
     def symbolic_new(symbolic_cls, *args, **kwargs):
-        domain, kwargs = update_domain_and_kwargs_from_args(symbolic_cls, *args, **kwargs)
         predicate_type = PredicateType.SubClassOfPredicate if issubclass(symbolic_cls, Predicate) else None
+        node = SymbolicExpression._current_parent_()
+        args = bind_first_argument_of_predicate_if_in_query_context(node, predicate_type, *args)
+        domain, kwargs = update_domain_and_kwargs_from_args(symbolic_cls, *args, **kwargs)
         # This mode is when we try to infer new instances of variables, this includes also evaluating predicates
         # because they also need to be inferred. So basically this mode is when there is no domain availabe and
         # we need to infer new values.
         if not domain and (in_symbolic_mode(EQLMode.Rule) or predicate_type):
-            return Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type,
+            var = Variable(symbolic_cls.__name__, symbolic_cls, _kwargs_=kwargs, _predicate_type_=predicate_type,
                             _is_indexed_=index_class_cache(symbolic_cls))
+            update_query_child_expression_if_in_query_context(node, predicate_type, var)
+            return var
         else:
             # In this mode, we either have a domain through the `domain` provided here, or through the cache if
             # the domain is not provided. Then we filter this domain by the provided constraints on the variable
@@ -88,6 +93,28 @@ def symbol(cls):
 
 cls_args = {}
 
+def bind_first_argument_of_predicate_if_in_query_context(node: SymbolicExpression,
+                                                         predicate_type: Optional[PredicateType],
+                                                         *args):
+    if predicate_type and node and in_symbolic_mode(EQLMode.Query):
+        if not isinstance(node, ResultQuantifier):
+            result_quantifier = node._parent_._parent_
+        else:
+            result_quantifier = node
+        args = [result_quantifier._child_.selected_variables[0]] + list(args)
+    return args
+
+
+def update_query_child_expression_if_in_query_context(node: SymbolicExpression,
+                                                      predicate_type: Optional[PredicateType],
+                                                      var: SymbolicExpression):
+    if predicate_type and node and in_symbolic_mode(EQLMode.Query):
+        if node._child_._child_:
+            node._child_._child_ = AND(node._child_._child_, var)
+        else:
+            node._child_._child_ = var
+
+
 def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
     """
     Set the domain if provided as the first argument and update the kwargs with the remaining arguments.
@@ -98,9 +125,7 @@ def update_domain_and_kwargs_from_args(symbolic_cls: Type, *args, **kwargs):
     :return: The domain and updated kwargs.
     """
     domain = None
-    global cls_args
-    if symbolic_cls not in cls_args:
-        cls_args[symbolic_cls] = list(inspect.signature(symbolic_cls.__init__).parameters.keys())
+    update_cls_args(symbolic_cls)
     init_args = cls_args[symbolic_cls]
     for i, arg in enumerate(args):
         if isinstance(arg, From):
@@ -151,8 +176,7 @@ def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callabl
     instance = original_new(symbolic_cls)
     index = index_class_cache(symbolic_cls)
     if index:
-        if symbolic_cls not in cls_args:
-            cls_args[symbolic_cls] = list(inspect.signature(symbolic_cls.__init__).parameters.keys())
+        update_cls_args(symbolic_cls)
         kwargs = {f: HashedValue(getattr(instance, f)) for f in cls_args[symbolic_cls][1:]}
         if symbolic_cls not in Variable._cache_ or not Variable._cache_[symbolic_cls].keys:
             Variable._cache_[symbolic_cls].keys = kwargs.keys()
@@ -160,6 +184,13 @@ def instantiate_class_and_update_cache(symbolic_cls: Type, original_new: Callabl
         kwargs = {}
     Variable._cache_[symbolic_cls].insert(kwargs, HashedValue(instance), index=index)
     return instance
+
+
+def update_cls_args(symbolic_cls: Type):
+    global cls_args
+    if symbolic_cls not in cls_args:
+        cls_args[symbolic_cls] = list(inspect.signature(symbolic_cls.__init__).parameters.keys())
+
 
 def index_class_cache(symbolic_cls: Type) -> bool:
     """
