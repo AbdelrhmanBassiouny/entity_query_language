@@ -559,7 +559,7 @@ def test_generate_with_using_inherited_predicate(handles_and_containers_world):
     """
     world = handles_and_containers_world
 
-    @dataclass
+    @dataclass(frozen=True)
     class IsHandle(Predicate):
         body: Body
 

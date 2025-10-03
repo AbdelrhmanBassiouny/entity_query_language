@@ -201,7 +201,7 @@ def index_class_cache(symbolic_cls: Type) -> bool:
 
 
 @symbol
-@dataclass(eq=False)
+@dataclass(eq=False, frozen=True)
 class Predicate(ABC):
     """
     The super predicate class that represents a filtration operation.
@@ -217,7 +217,7 @@ class Predicate(ABC):
         ...
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, frozen=True)
 class HasType(Predicate):
     variable: Any
     types_: Type
@@ -227,6 +227,6 @@ class HasType(Predicate):
         return isinstance(self.variable, self.types_)
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, frozen=True)
 class HasTypes(HasType):
     types_: Tuple[Type, ...]

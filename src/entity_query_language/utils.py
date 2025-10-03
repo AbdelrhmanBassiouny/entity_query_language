@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Type, Iterable, Tuple, Union
 
 """
 Utilities for hashing, rendering, and general helpers used by the
@@ -49,7 +50,6 @@ class IDGenerator:
         """
         self._counter += 1
         return self._counter
-
 
 def lazy_iterate_dicts(dict_of_iterables):
     """Generator that yields dicts with one value from each iterable"""
