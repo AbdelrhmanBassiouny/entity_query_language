@@ -207,6 +207,23 @@ class Predicate(ABC):
     The super predicate class that represents a filtration operation.
     """
     is_expensive: ClassVar[bool] = False
+    transitive: ClassVar[bool] = False
+    inverse_of: ClassVar[Optional[Predicate]] = None
+
+    def __init_subclass__(cls, **kwargs):
+        """
+        Ensure that when a predicate declares an inverse_of, the referenced predicate
+        also points back to this predicate via its own inverse_of.
+        """
+        super().__init_subclass__(**kwargs)
+        inverse = getattr(cls, "inverse_of", None)
+        if inverse is not None:
+            # Validate type to prevent misuse
+            if not isinstance(inverse, type) or not issubclass(inverse, Predicate):
+                raise TypeError("inverse_of must be set to a Predicate subclass")
+            # Set reciprocal link only if not already set or mismatched
+            if getattr(inverse, "inverse_of", None) is None:
+                inverse.inverse_of = cls
 
     @abstractmethod
     def __call__(self) -> Any:

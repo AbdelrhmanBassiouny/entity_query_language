@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from entity_query_language.property_descriptor import PropertyDescriptor, OntologyMeta
+from entity_query_language.property_descriptor import PropertyDescriptor, Thing
 
 
 # Concrete descriptor used in tests
@@ -13,7 +13,7 @@ class WorksFor(PropertyDescriptor):
 
 
 @dataclass
-class Organization:
+class Organization(Thing):
     name: str
 
 
@@ -23,7 +23,7 @@ class Company(Organization):
 
 
 @dataclass
-class Person(metaclass=OntologyMeta):
+class Person(Thing):
     name: str
     worksForOrg: List[Organization] = WorksFor()
     worksForCompany: List[Company] = WorksFor()

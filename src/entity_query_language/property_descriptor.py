@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, MISSING
 from functools import cached_property
 from typing import Generic, TypeVar, ClassVar, Set, Optional, Callable, Type, Iterable
 
-from . import Predicate
+from . import Predicate, symbol
 from .typing_utils import get_range_types
 from .utils import make_set
 
@@ -17,7 +17,7 @@ NOTSET = object()
 class PropertyDescriptor(Generic[T], Predicate):
     """Descriptor storing values on instances while keeping type metadata on the descriptor.
 
-    When used on dataclass fields and combined with OntologyMeta, the descriptor
+    When used on dataclass fields and combined with Thing, the descriptor
     injects a hidden dataclass-managed attribute (backing storage) into the owner class
     and collects domain and range types for introspection.
     """
@@ -106,7 +106,7 @@ class PropertyDescriptor(Generic[T], Predicate):
             return False
 
 
-class OntologyMeta(type):
+class DescriptionMeta(type):
     """Metaclass that recognizes PropertyDescriptor class attributes and wires backing storage."""
 
     def __new__(cls, name, bases, attrs):
@@ -116,3 +116,8 @@ class OntologyMeta(type):
                 continue
             attr_value.create_managed_attribute_for_class(new_class, attr_name)
         return new_class
+
+@symbol
+class Thing(metaclass=DescriptionMeta):
+    """Base class for things that can be described by property descriptors."""
+    ...
