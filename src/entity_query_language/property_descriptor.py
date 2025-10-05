@@ -101,8 +101,9 @@ class PropertyDescriptor(Generic[T], Predicate):
             for prop_type, prop_data in self.obj._properties_.items():
                 if issubclass(prop_type, self.__class__):
                     for prop_name, prop_val in prop_data.items():
-                        if make_set(self.value).issubset(make_set(getattr(self.obj, prop_name))):
-                            return True
+                        if hasattr(self.obj, prop_name):
+                            if make_set(self.value).issubset(make_set(getattr(self.obj, prop_name))):
+                                return True
             return False
 
 

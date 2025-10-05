@@ -28,10 +28,12 @@ class Company(Organization):
     ...
 
 
-@symbol
-@dataclass(unsafe_hash=True)
+@dataclass(eq=False)
 class Person(Thing):
     name: str
+
+@dataclass(eq=False)
+class Employee(Person):
     works_for: List[Organization] = WorksFor(default_factory=list)
 
 
@@ -57,8 +59,8 @@ def test_query_on_descriptor_inheritance():
     org2 = Company("ABC")
 
     people = [
-        Person("John"),
-        Person("Jane"),
+        Employee("John"),
+        Employee("Jane"),
     ]
     people[0].works_for = [org1]
     people[1].works_for = [org2]
