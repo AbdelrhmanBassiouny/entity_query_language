@@ -87,6 +87,6 @@ object instance and use them as part of the query conditions.
 author = {Bassiouny, Abdelrhman},
 title = {Entity-Query-Language},
 url = {https://github.com/AbdelrhmanBassiouny/entity_query_language},
-version = {3.0.0},
+version = {3.1.0},
 }
 ```
