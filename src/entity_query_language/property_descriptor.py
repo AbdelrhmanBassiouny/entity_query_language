@@ -76,13 +76,44 @@ class PropertyDescriptor(Generic[T], Predicate):
 
     def update_range_types(self, cls: Type, attr_name: str) -> None:
         # Support postponed annotations (from __future__ import annotations) which store strings
+        # type_hint = cls.__annotations__[attr_name]
+        # if isinstance(type_hint, str):
+        #     type_hint = eval(type_hint, vars(__import__(cls.__module__, fromlist=['*'])))
+        # for new_type in get_range_types(type_hint):
+        #     if any(issubclass(new_type, range_cls) for range_cls in self.range_types):
+        #         continue
+        #     self.range_types.add(new_type)
         type_hint = cls.__annotations__[attr_name]
         if isinstance(type_hint, str):
-            type_hint = eval(type_hint, vars(__import__(cls.__module__, fromlist=['*'])))
+            try:
+                type_hint = eval(
+                    type_hint, vars(__import__(cls.__module__, fromlist=["*"]))
+                )
+            except NameError:
+                # Try again with the class under construction injected; if still failing, skip for now.
+                try:
+                    module_globals = vars(
+                        __import__(cls.__module__, fromlist=["*"])
+                    ).copy()
+                    module_globals[cls.__name__] = cls
+                    type_hint = eval(type_hint, module_globals)
+                except NameError:
+                    return
         for new_type in get_range_types(type_hint):
-            if any(issubclass(new_type, range_cls) for range_cls in self.range_types):
+            try:
+                is_sub = any(
+                    issubclass(new_type, range_cls) for range_cls in self.range_types
+                )
+            except TypeError:
+                # new_type is not a class (e.g., typing constructs); skip subclass check
+                is_sub = False
+            if is_sub:
                 continue
-            self.range_types.add(new_type)
+            try:
+                self.range_types.add(new_type)
+            except TypeError:
+                # Unhashable or invalid type; ignore
+                continue
 
     def __get__(self, obj, objtype=None):
         if obj is None:
